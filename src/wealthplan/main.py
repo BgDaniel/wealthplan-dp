@@ -1,12 +1,12 @@
 import datetime as dt
 
-from src.wealthplan.cashflows.pension import Pension
 from src.wealthplan.wealth import Wealth
 from src.wealthplan.cashflows.salary import Salary
 from src.wealthplan.cashflows.rent import Rent
 from src.wealthplan.cashflows.pension import Pension
 from src.wealthplan.cashflows.life_insurance import LifeInsurance
-from src.wealthplan.bellman import BellmanOptimizer
+from src.wealthplan.optimizer.deterministic.bellman.bellman_optimizer import BellmanOptimizer
+
 
 def main():
     # Simulation dates
@@ -25,7 +25,7 @@ def main():
     wealth = Wealth(initial_wealth=100000, yearly_return=0.06)
 
     # Bellman solver
-    bellman = BellmanOptimizer(
+    bell = BellmanOptimizer(
         start_date=start_date,
         end_date=end_date,
         wealth=wealth,
@@ -33,15 +33,13 @@ def main():
         beta=1.0
     )
 
-    # Solve Bellman equation
-    V, policy = bellman.solve()
+    bell.solve()
+    bell.plot()
 
-    # Print first 12 months of policy
-    print("Month | Optimal Consumption | Wealth Start")
-    for date_t in list(policy.keys())[:12]:
-        W0 = wealth.initial_wealth
-        C_opt = policy[date_t][W0]
-        print(f"{date_t} | {C_opt:.2f} | {W0:.2f}")
+    # Lagrange (deterministic)
+    lag = LagrangeOptimizer(start, end, wealth, cashflows, beta=0.99)
+    lag.solve()
+    lag.plot()
 
 if __name__ == "__main__":
     main()
