@@ -3,12 +3,13 @@ import pickle
 import logging
 import datetime as dt
 from typing import List, Dict, Callable, Tuple, Optional
-
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.salary import Salary
 from src.wealthplan.wealth import Wealth
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class BaseConsumptionOptimizer:
         wealth: Wealth,
         cashflows: List[Cashflow],
         beta: float = 1.0,
-        w_max: float = 250_000.0,
+        w_max: float = 750000.0,
         w_min: float = 0.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
@@ -79,7 +80,7 @@ class BaseConsumptionOptimizer:
 
         # utilities
         self.instant_utility: Callable[[float], float] = instant_utility or (
-            lambda c: np.log(c) if c > 0 else -1e10
+            lambda c: c**2 if c > 0 else -1e10
         )
         self.terminal_penalty: Callable[[float], float] = terminal_penalty or (
             lambda w: -(w**2)
@@ -174,37 +175,71 @@ class BaseConsumptionOptimizer:
         if self.opt_wealth.empty:
             raise RuntimeError("No solution available — call solve() first.")
 
-        fig, axs = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        fig, axs = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
 
+        # Formatter for y-axis: thousand separators
+        def thousands_formatter(x, pos):
+            return f"{x:,.0f}"
+
+        # --- Try to detect retirement date from salary cashflow ---
+        retirement_date: Optional[dt.date] = None
+
+        for cf in self.cashflows:
+            if isinstance(cf, Salary):
+                # Salary usually has an end_date or retirement_date
+                retirement_date = cf.retirement_date
+                break
+
+        # --- Wealth plot ---
         axs[0].plot(
-            self.opt_wealth.index, self.opt_wealth.values, label="Optimized Wealth"
+            self.opt_wealth.index,
+            self.opt_wealth.values,
+            label="Optimized Wealth",
+            color="tab:blue",
+            linewidth=2,
+        )
+        axs[0].axvline(
+            retirement_date,
+            color="red",
+            linestyle="--",
+            linewidth=1.5,
+            label="Retirement Date",
         )
         axs[0].set_ylabel("Wealth")
         axs[0].set_title("Optimized Wealth Over Time")
-        axs[0].legend(loc="upper left")
-        axs[0].grid(True)
+        axs[0].legend(loc="lower left")
+        axs[0].grid(True, alpha=0.3)
+        axs[0].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
+        # --- Consumption + Cashflows plot ---
         axs[1].plot(
             self.opt_consumption.index,
             self.opt_consumption.values,
             label="Optimized Consumption",
+            color="tab:green",
             linewidth=2,
         )
-        axs[1].set_ylabel("Consumption")
-        axs[1].set_title("Optimized Consumption Over Time")
-        axs[1].legend(loc="upper left")
-        axs[1].grid(True)
-
-        axs[2].bar(
+        axs[1].plot(
             self.monthly_cashflows.index,
             self.monthly_cashflows.values,
-            alpha=0.7,
             label="Monthly Cashflows",
+            color="tab:orange",
+            linewidth=2,
+            linestyle="--",
+            alpha=0.8,
         )
-        axs[2].set_ylabel("Cashflows")
-        axs[2].set_title("Monthly Cashflows")
-        axs[2].legend(loc="upper left")
-        axs[2].grid(True)
+        axs[1].axvline(
+            retirement_date,
+            color="red",
+            linestyle="--",
+            linewidth=1.5,
+            label="Retirement Date",
+        )
+        axs[1].set_ylabel("Consumption / Cashflows")
+        axs[1].set_title("Consumption and Cashflows Over Time")
+        axs[1].legend(loc="lower left")
+        axs[1].grid(True, alpha=0.3)
+        axs[1].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
         plt.xlabel("Date")
         plt.tight_layout()
