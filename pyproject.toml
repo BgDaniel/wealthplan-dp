@@ -1,0 +1,30 @@
+[project]
+name = "wealthplan-dp"
+version = "0.1.0"
+description = """
+A deterministic, multi-period model for personal wealth planning.
+Using the Bellman equation, it optimizes consumption and portfolio allocation
+while accounting for income, rent, pensions, and insurance to maximize
+long-term financial outcomes.
+"""
+authors = [
+    {name = "daniel.bergermat@t-online.de"}
+]
+license = {text = "MIT License"}
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy (>=2.3.4,<3.0.0)",
+    "pandas (>=2.3.3,<3.0.0)",
+    "matplotlib (>=3.10.7,<4.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
+    "scipy (>=1.16.3,<2.0.0)",
+    "pydantic (>=2.12.4,<3.0.0)",
+    "fastapi (>=0.121.0,<0.122.0)",
+    "uvicorn (>=0.38.0,<0.39.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
