@@ -9,21 +9,49 @@ from tqdm import tqdm
 from src.wealthplan.optimizer.deterministic.base_optimizer import (
     BaseConsumptionOptimizer,
 )
+from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
+from wealthplan.optimizer.stochastic.survival_process.survival_process import (
+    SurvivalProcess,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
-class DeterministicBellmanOptimizer(BaseConsumptionOptimizer):
-    """
-    Deterministic Bellman (backward induction) optimizer.
-    """
-
-    def __init__(self, *args, **kwargs) -> None:
+class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
+    def __init__(
+        self,
+        gbm_returns: GBM,
+        survival_process: SurvivalProcess,
+        n_sims: int,
+        *args,
+        **kwargs,
+    ) -> None:
         """
-        All parameters are forwarded to BaseConsumptionOptimizer.
+        Initialize the stochastic Bellman optimizer.
+
+        Parameters
+        ----------
+        gbm_returns : object
+            Stochastic returns simulator
+        survival_process : object
+            Survival / mortality process
+        *args, **kwargs : forwarded to BaseConsumptionOptimizer
         """
         super().__init__(*args, **kwargs)
+
+        self.gbm_returns = gbm_returns
+        self.survival_process = survival_process
+
+        self.n_sims = n_sims
+
+        self.returns_paths: np.ndarray = self.gbm_returns.simulate(
+            n_sims=n_sims, dates=self.months
+        )
+
+        self.survival_paths: np.ndarray = self.survival_process.simulate(
+            n_sims=n_sims, dates=self.months
+        )
 
     def _backward_induction(self) -> None:
         """
