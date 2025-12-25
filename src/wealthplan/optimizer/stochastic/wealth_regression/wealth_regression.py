@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from typing import Optional
+import numpy as np
+
+
+class WealthRegressor:
+    """
+    Polynomial regression model for continuation values in stochastic DP.
+
+    Approximates:
+        v(w, s) = Σ β_{ijk} w^i r_s^j q_s^k
+
+    where:
+        - w is wealth (grid)
+        - r_s are simulated returns
+        - q_s are survival indicators / probabilities
+    """
+
+    def __init__(
+        self,
+        wealth_grid: np.ndarray,
+        returns: np.ndarray,
+        survival_paths: np.ndarray,
+        deg_w: int = 3,
+        deg_r: int = 3,
+        deg_q: int = 1,
+    ) -> None:
+        """
+        Initialize the regressor.
+
+        Parameters
+        ----------
+        wealth_grid : np.ndarray, shape (n_w,)
+            Deterministic wealth grid.
+        returns : np.ndarray, shape (n_sims,)
+            Simulated returns.
+        survival_paths : np.ndarray, shape (n_sims,)
+            Survival indicators or probabilities.
+        deg_w : int, default=3
+            Polynomial degree in wealth.
+        deg_r : int, default=2
+            Polynomial degree in returns.
+        deg_q : int, default=1
+            Polynomial degree in survival.
+        """
+        if wealth_grid.ndim != 1:
+            raise ValueError("wealth_grid must be 1D.")
+        if returns.ndim != 1:
+            raise ValueError("returns must be 1D.")
+        if survival_paths.ndim != 1:
+            raise ValueError("survival_paths must be 1D.")
+        if returns.shape[0] != survival_paths.shape[0]:
+            raise ValueError("returns and survival_paths must have same length.")
+
+        self.wealth_grid = wealth_grid
+        self.returns = returns
+        self.survival_paths = survival_paths
+
+        self.deg_w = deg_w
+        self.deg_r = deg_r
+        self.deg_q = deg_q
+
+        self.coeffs: Optional[np.ndarray] = None
+
+    # ------------------------------------------------------------------
+    # Basis helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _poly_basis(x: np.ndarray, degree: int) -> np.ndarray:
+        """
+        Polynomial basis [1, x, x^2, ..., x^degree].
+
+        Parameters
+        ----------
+        x : np.ndarray, shape (n,)
+        degree : int
+
+        Returns
+        -------
+        np.ndarray, shape (n, degree + 1)
+        """
+        return np.vstack([x ** k for k in range(degree + 1)]).T
+
+    def _design_matrix(self) -> np.ndarray:
+        """
+        Build full tensor-product design matrix.
+
+        Returns
+        -------
+        np.ndarray, shape (n_w * n_sims, n_features)
+        """
+        W = self._poly_basis(self.wealth_grid, self.deg_w)        # (n_w, Dw)
+        R = self._poly_basis(self.returns, self.deg_r)           # (n_sims, Dr)
+        Q = self._poly_basis(self.survival_paths, self.deg_q)    # (n_sims, Dq)
+
+        # Combine return & survival (simulation-wise)
+        RS = np.einsum("sr,sk->srk", R, Q).reshape(
+            self.returns.size, -1
+        )  # (n_sims, Dr*Dq)
+
+        # Full tensor product with wealth
+        Z = np.einsum("wi,sj->wsij", W, RS).reshape(
+            self.wealth_grid.size * self.returns.size, -1
+        )
+
+        return Z
+
+    def regress(
+        self,
+        v_next: np.ndarray,
+    ) -> tuple[np.ndarray, float]:
+        """
+        Fit the regression to v_next and immediately predict continuation values.
+
+        Parameters
+        ----------
+        v_next : np.ndarray, shape (n_w, n_sims)
+            Continuation values to regress.
+        r_squared_threshold : float, default=0.9
+            Minimum acceptable R-squared. Raises exception if fit is worse.
+
+        Returns
+        -------
+        cont_value : np.ndarray, shape (n_w, n_sims)
+            Predicted continuation values.
+        r_squared : float
+            Coefficient of determination of the fit.
+
+        Raises
+        ------
+        RuntimeError
+            If the R-squared is below `r_squared_threshold`.
+        """
+        # Flatten design matrix and fit
+        Z = self._design_matrix()
+        y = v_next.reshape(-1)
+
+        coeffs, residuals, *_ = np.linalg.lstsq(Z, y, rcond=None)
+        self.coeffs = np.atleast_1d(coeffs)
+
+        # Predict
+        v_hat = (Z @ self.coeffs).reshape(v_next.shape)
+
+        # Compute R-squared using residuals if available
+        ss_res = np.sum((y - Z @ self.coeffs) ** 2)
+        ss_total = np.sum((y - y.mean()) ** 2)
+        r_squared = 1 - ss_res / ss_total
+
+        return v_hat, r_squared

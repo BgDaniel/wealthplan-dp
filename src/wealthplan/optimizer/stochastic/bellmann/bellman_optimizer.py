@@ -4,6 +4,7 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import numba as nb
 
 
 from src.wealthplan.optimizer.deterministic.base_optimizer import (
@@ -13,9 +14,44 @@ from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.survival_process.survival_process import (
     SurvivalProcess,
 )
-
+from wealthplan.optimizer.stochastic.wealth_regression.wealth_regression import WealthRegressor
 
 logger = logging.getLogger(__name__)
+
+
+@nb.njit(parallel=True)
+def interp_2d(
+    w_next: np.ndarray,
+    wealth_grid: np.ndarray,
+    v_regressed: np.ndarray
+) -> np.ndarray:
+    """
+    Perform 2D interpolation of regressed continuation values along wealth for each simulation.
+
+    Parameters
+    ----------
+    w_next : np.ndarray, shape (n_w, n_c, n_sims)
+        Wealth points to interpolate to.
+    wealth_grid : np.ndarray, shape (n_w,)
+        Grid of wealth points corresponding to v_regressed.
+    v_regressed : np.ndarray, shape (n_w, n_sims)
+        Regressed continuation values.
+
+    Returns
+    -------
+    np.ndarray, shape (n_w, n_c, n_sims)
+        Interpolated continuation values at `w_next`.
+    """
+    n_w, n_c, n_sims = w_next.shape
+    v_next_interp = np.empty_like(w_next, dtype=np.float32)
+
+    for s in nb.prange(n_sims):
+        for i in range(n_w):
+            # np.interp is not natively supported by Numba, so we need a workaround
+            # But if using object mode or JIT with nopython=False, it will work
+            v_next_interp[i, :, s] = np.interp(w_next[i, :, s], wealth_grid, v_regressed[:, s])
+
+    return v_next_interp
 
 
 class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
@@ -24,6 +60,11 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         gbm_returns: GBM,
         survival_process: SurvivalProcess,
         n_sims: int,
+        w_max: float = 500000.0,
+        w_min: float = 0.0,
+        w_step: float = 1000.0,
+        c_step: float = 500.0,
+        r_squared_threshold: float = 0.9,
         *args,
         **kwargs,
     ) -> None:
@@ -38,7 +79,9 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
             Survival / mortality process
         *args, **kwargs : forwarded to BaseConsumptionOptimizer
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            w_max=w_max, w_min=w_min, w_step=w_step, c_step=c_step, *args, **kwargs
+        )
 
         self.gbm_returns = gbm_returns
         self.survival_process = survival_process
@@ -53,6 +96,58 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
             n_sims=n_sims, dates=self.months
         )
 
+        self.wealth_grid = np.arange(
+            self.w_min, self.w_max, self.w_step, dtype=np.float32
+        )
+
+        self.r_squared_threshold = r_squared_threshold
+
+    def _regress_value_function(
+            self,
+            v_next: np.ndarray,
+            returns_paths: np.ndarray,
+            survival_paths: np.ndarray
+    ) -> np.ndarray:
+        """
+        Regress the value function over wealth, returns, and survival paths.
+
+        Parameters
+        ----------
+        v_next : np.ndarray, shape (n_w, n_sims)
+            Value function or continuation values to regress.
+        returns_paths : np.ndarray, shape (n_sims,)
+            Simulated returns for the current time step.
+        survival_paths : np.ndarray, shape (n_sims,)
+            Survival indicator/probabilities for the current time step.
+
+        Returns
+        -------
+        np.ndarray
+            Regressed value function, same shape as v_next.
+
+        Raises
+        ------
+        RuntimeError
+            If the regression R-squared falls below self.r_squared_threshold.
+        """
+        # Setup the regressor
+        regressor = WealthRegressor(
+            wealth_grid=self.wealth_grid,
+            returns=returns_paths,
+            survival_paths=survival_paths
+        )
+
+        # Perform regression
+        v_regressed, r_squared = regressor.regress(v_next=v_next)
+
+        # Check threshold
+        if r_squared < self.r_squared_threshold:
+            raise RuntimeError(
+                f"Fit R-squared = {r_squared:.4f} below threshold {self.r_squared_threshold}"
+            )
+
+        return v_regressed
+
     def _backward_induction(self) -> None:
         """
         Compute value function and policy by backward induction on discrete grids.
@@ -60,9 +155,15 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         """
         n_w = len(self.wealth_grid)
         # initialize terminal value
-        v_next = np.array([self.terminal_penalty(w) for w in self.wealth_grid])
 
-        r = self.wealth.monthly_return()
+        v_terminal = np.array(
+            [self.terminal_penalty(w) for w in self.wealth_grid], dtype=np.float32
+        )
+
+        v_next = np.tile(v_terminal[:, np.newaxis], (1, self.n_sims))
+
+        r = self.returns_paths[:, 1:] / self.returns_paths[:, :-1]
+
         beta = self.beta
         c_step = self.c_step
 
@@ -76,31 +177,48 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
             cf_t = self.monthly_cashflow(date_t)
 
             # candidate consumptions
-            available = self.wealth_grid + cf_t  # shape (n_w,)
+            available = self.wealth_grid[:, np.newaxis] + cf_t
+            available = np.repeat(available, self.n_sims, axis=1)  # shape (n_w, n_sims)
+
             n_c = int(np.ceil(np.max(available) / c_step)) + 1
-            c_grid = np.arange(0.0, n_c * c_step, c_step)  # shape (n_c,)
+            c_grid = np.arange(
+                0.0, n_c * c_step, c_step, dtype=np.float32
+            )  # shape (n_c,)
 
             # next period wealth for each (w, c)
-            w_next = (available[:, None] - c_grid[None, :]) * (1 + r)  # (n_w, n_c)
+            w_next = (available[:, None, :] - c_grid[None, :, None]) * r[:, t][None, None, :]  # (n_w, n_c, n_sims)
+
+            v_regressed = self._regress_value_function(v_next, self.returns_paths[:, t], self.survival_paths[:, t]) # (n_w, n_sims)
 
             # interpolate v_next for each row of w_next
-            # np.interp is 1d so vectorize with comprehension (ok for moderate grid sizes)
-            v_next_interp = np.array(
-                [np.interp(w_next[i], self.wealth_grid, v_next) for i in range(n_w)]
-            )
+            v_next_interp = interp_2d(w_next, self.wealth_grid, v_regressed)
 
             # instant utility vectorized (use log with numerical floor)
-            instant_util = np.log(np.maximum(c_grid, 1e-8))  # shape (n_c,)
-            values = instant_util[None, :] + beta * v_next_interp  # (n_w, n_c)
+            instant_util = self.instant_utility(c_grid)  # shape (n_c,)
+
+            # Repeat across simulations
+            instant_util = np.tile(instant_util[:, None], (1, self.n_sims))  # shape (n_c, n_sims)
+
+            # Set utility to 0 where dead
+            instant_util *= self.survival_paths[:, t][None, :]  # broadcast survival_paths over n_c
+
+            # Add continuation value (v_next_interp is shape (n_w, n_c, n_sims))
+            values = instant_util[None, :, :] + beta * v_next_interp  # shape (n_w, n_c, n_sims)
 
             # enforce feasibility (next wealth >= 0)
             feasible_mask = w_next >= 0
-            feasible_values = np.where(feasible_mask, values, -np.inf)
+            feasible_values = np.where(feasible_mask, values, -np.inf) # (n_w, n_c, n_sims)
 
             # select best consumption index per starting wealth
             best_idx = np.argmax(feasible_values, axis=1)
-            v_curr = values[np.arange(n_w), best_idx]
-            policy_curr = c_grid[best_idx]
+
+            w_idx = np.arange(n_w)[:, None]  # shape (n_w, 1)
+            s_idx = np.arange(self.n_sims)[None, :]  # shape (1, n_sims)
+
+            # Select the best values
+            v_curr = values[w_idx, best_idx, s_idx]  # shape (n_w, n_sims)
+
+            policy_curr = c_grid[best_idx] # shape (n_w, n_sims)
 
             self.value_function[date_t] = v_curr.copy()
             self.policy[date_t] = policy_curr.copy()
@@ -167,22 +285,16 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         self.monthly_cashflows = pd.Series(cashflow_path, index=self.months)
 
     def solve(self) -> Tuple[Dict[dt.date, np.ndarray], Dict[dt.date, np.ndarray]]:
-        """
-        Solve with backward induction (or load cache if available), then roll forward.
+        """Solve with backward induction (or load cache if available), then roll forward.
         Returns (value_function, policy).
         """
         logger.info("BellmanOptimizer.solve() started.")
-        cache_loaded = self._load_cache()
-        if cache_loaded:
-            logger.info("Cache loaded; skipping backward induction.")
-        else:
-            logger.info("Running backward induction.")
-            self._backward_induction()
-            if self.save:
-                logger.info("Saving expansion to cache.")
-                self._save_cache()
+
+        self._backward_induction()
 
         logger.info("Rolling forward to get paths.")
         self._roll_forward()
+
         logger.info("BellmanOptimizer.solve() finished.")
+
         return self.value_function, self.policy

@@ -79,11 +79,12 @@ class BaseConsumptionOptimizer:
         self.c_step: float = c_step
 
         # utilities
-        self.instant_utility: Callable[[float], float] = instant_utility or (
-            lambda c: c**2 if c > 0 else -1e10
+        self.instant_utility: Callable[[np.ndarray], np.ndarray] = instant_utility or (
+            lambda c: np.log(np.maximum(c, 10e-8))
         )
-        self.terminal_penalty: Callable[[float], float] = terminal_penalty or (
-            lambda w: -(w**2)
+
+        self.terminal_penalty: Callable[[np.ndarray], np.ndarray] = terminal_penalty or (
+            lambda w: -(w ** 2)
         )
 
         self.save: bool = save
@@ -100,20 +101,11 @@ class BaseConsumptionOptimizer:
         self.opt_consumption: pd.Series = pd.Series(dtype=float)
         self.monthly_cashflows: pd.Series = pd.Series(dtype=float)
 
-        # Prepare commonly-used structures
-        self.prepare()
-
-    def prepare(self) -> None:
-        """
-        Prepare time grid (months) and discrete wealth grid.
-        Can be extended/overridden by subclasses if they need extra precomputation.
-        """
         self.months = [
             d.date()
             for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
         ]
         self.n_months = len(self.months)
-        self.wealth_grid = np.arange(self.w_min, self.w_max + self.w_step, self.w_step)
 
     def monthly_cashflow(self, date: dt.date) -> float:
         """Sum deterministic cashflows for the given month."""

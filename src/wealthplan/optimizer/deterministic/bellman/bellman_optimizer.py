@@ -25,6 +25,8 @@ class DeterministicBellmanOptimizer(BaseConsumptionOptimizer):
         """
         super().__init__(*args, **kwargs)
 
+        self.wealth_grid = np.arange(self.w_min, self.w_max + self.w_step, self.w_step)
+
     def _backward_induction(self) -> None:
         """
         Compute value function and policy by backward induction on discrete grids.
