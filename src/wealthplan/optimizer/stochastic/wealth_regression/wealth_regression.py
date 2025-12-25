@@ -1,7 +1,10 @@
-from __future__ import annotations
-
+import matplotlib.pyplot as plt
+import logging
 from typing import Optional
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 class WealthRegressor:
@@ -104,6 +107,30 @@ class WealthRegressor:
             self.wealth_grid.size * self.returns.size, -1
         )
 
+        # Condition number before scaling
+        cond_pre = np.linalg.cond(Z)
+
+        # Scale each column safely
+        for i in range(Z.shape[1]):
+            col = Z[:, i]
+            std = col.std()
+            if std < 1e-12:
+                # Column is constant: skip scaling
+                Z[:, i] = 1.0
+            else:
+                Z[:, i] = (col - col.mean()) / std
+
+        # Condition number after scaling
+        cond_post = np.linalg.cond(Z)
+        reduction = cond_pre / cond_post if cond_post != 0 else float("inf")
+
+        logger.info(f"Condition number reduced from {cond_pre:.2e} to {cond_post:.2e} "
+                    f"(reduction factor ≈ {reduction:.2f})")
+
+        # Raise error only if post-scaling matrix is still ill-conditioned
+        #if cond_post > 1e10:
+        #    raise RuntimeError(f"Design matrix is ill-conditioned after scaling (cond={cond_post:.2e})")
+
         return Z
 
     def regress(
@@ -136,6 +163,14 @@ class WealthRegressor:
         Z = self._design_matrix()
         y = v_next.reshape(-1)
 
+        # Check if all columns are constant after scaling (std ~ 0)
+        if np.all(np.std(Z, axis=0) < 1e-12):
+            mean_value = v_next.mean()
+            v_hat = np.full_like(v_next, mean_value)
+            r_squared = 0.0
+
+            return v_hat, r_squared
+
         coeffs, residuals, *_ = np.linalg.lstsq(Z, y, rcond=None)
         self.coeffs = np.atleast_1d(coeffs)
 
@@ -148,3 +183,134 @@ class WealthRegressor:
         r_squared = 1 - ss_res / ss_total
 
         return v_hat, r_squared
+
+    def plot_regression_fit_1d(
+        self,
+        v_next: np.ndarray,
+        n_samples: Optional[int] = 1000,
+        show_residuals: bool = True,
+        figsize=(10, 6)
+    ) -> None:
+        """
+        Plot predicted vs observed continuation values for diagnostics.
+
+        Parameters
+        ----------
+        v_next : np.ndarray, shape (n_w, n_sims)
+            True continuation values used for regression.
+        n_samples : int, optional
+            Maximum number of points to scatter for readability.
+        show_residuals : bool, default True
+            Whether to plot residuals vs wealth.
+        figsize : tuple
+            Figure size.
+        """
+        if self.coeffs is None:
+            raise RuntimeError("Regression coefficients not computed yet. Call regress() first.")
+
+        # Predict continuation values
+        Z = self._design_matrix()
+        v_hat = (Z @ self.coeffs).reshape(v_next.shape)
+
+        # Flatten arrays for plotting
+        y_true = v_next.flatten()
+        y_pred = v_hat.flatten()
+
+        # Sample points if too many
+        if n_samples is not None and y_true.size > n_samples:
+            idx = np.random.choice(y_true.size, n_samples, replace=False)
+            y_true = y_true[idx]
+            y_pred = y_pred[idx]
+
+        # Plot observed vs predicted
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.scatter(y_true, y_pred, alpha=0.6)
+        ax.plot([y_true.min(), y_true.max()],
+                [y_true.min(), y_true.max()], 'r--', lw=2, label="y=x")
+        ax.set_xlabel("Observed continuation value")
+        ax.set_ylabel("Predicted continuation value")
+        ax.set_title("WealthRegressor: Observed vs Predicted")
+        ax.legend()
+        ax.grid(True)
+
+        if show_residuals:
+            residuals = y_true - y_pred
+            fig2, ax2 = plt.subplots(figsize=figsize)
+            ax2.scatter(y_true, residuals, alpha=0.6)
+            ax2.axhline(0, color='r', linestyle='--')
+            ax2.set_xlabel("Observed continuation value")
+            ax2.set_ylabel("Residual (Observed - Predicted)")
+            ax2.set_title("WealthRegressor Residuals")
+            ax2.grid(True)
+
+        plt.show()
+
+    def plot_regression_fit_2d(
+            self,
+            v_next: np.ndarray,
+            n_samples: Optional[int] = None,
+            figsize=(12, 6)
+    ) -> None:
+        """
+        Plot observed vs regressed continuation values as:
+        1) two 3D surfaces in stacked rows
+        2) optionally subsample simulations for readability
+
+        Parameters
+        ----------
+        v_next : np.ndarray, shape (n_w, n_sims)
+            True continuation values.
+        n_samples : int, optional
+            Maximum number of simulations to plot (for readability).
+        figsize : tuple
+            Base figure size (width, height per row)
+        """
+        if self.coeffs is None:
+            raise RuntimeError("Regression coefficients not computed yet. Call regress() first.")
+
+        # Predict continuation values
+        Z = self._design_matrix()
+        v_hat = (Z @ self.coeffs).reshape(v_next.shape)
+
+        # Compute R²
+        ss_res = np.sum((v_next - v_hat) ** 2)
+        ss_total = np.sum((v_next - v_next.mean()) ** 2)
+        r_squared = 1 - ss_res / ss_total
+        print(f"[WealthRegressor] Regression R² = {r_squared:.4f}")
+
+        n_sims = v_next.shape[1]
+
+        # Reorder simulation indices by returns
+        sorted_idx = np.argsort(self.returns)
+        if n_samples is not None and n_sims > n_samples:
+            idx = sorted_idx[:n_samples]  # take first n_samples sorted by return
+        else:
+            idx = sorted_idx  # take all simulations
+
+        v_next_plot = v_next[:, idx]
+        v_hat_plot = v_hat[:, idx]
+        sim_axis = idx
+
+        wealth_axis = self.wealth_grid
+        W, S = np.meshgrid(sim_axis, wealth_axis)
+
+        # ------------------------------
+        # 3D surface plots stacked vertically
+        # ------------------------------
+        fig1 = plt.figure(figsize=(figsize[0], figsize[1] * 2))
+        ax1 = fig1.add_subplot(2, 1, 1, projection='3d')
+        ax1.plot_surface(W, S, v_next_plot, cmap='viridis')
+        ax1.set_title("v_next (observed)")
+        ax1.set_xlabel("Simulation (sorted by returns)")
+        ax1.set_ylabel("Wealth")
+        ax1.set_zlabel("Value")
+
+        ax2 = fig1.add_subplot(2, 1, 2, projection='3d')
+        ax2.plot_surface(W, S, v_hat_plot, cmap='viridis')
+        ax2.set_title("v_hat (regressed)")
+        ax2.set_xlabel("Simulation (sorted by returns)")
+        ax2.set_ylabel("Wealth")
+        ax2.set_zlabel("Value")
+
+        plt.tight_layout()
+        plt.show()

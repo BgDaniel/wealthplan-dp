@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from src.wealthplan.cashflows.base import Cashflow
 from src.wealthplan.cashflows.salary import Salary
 from src.wealthplan.wealth import Wealth
+from wealthplan.optimizer.utility_functions import crra_utility
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,11 @@ class BaseConsumptionOptimizer:
         self.c_step: float = c_step
 
         # utilities
+        gamma = 0.5  # risk aversion parameter < 1
+        epsilon = 1e-3
+
         self.instant_utility: Callable[[np.ndarray], np.ndarray] = instant_utility or (
-            lambda c: np.log(np.maximum(c, 10e-8))
+            lambda c: crra_utility(c)
         )
 
         self.terminal_penalty: Callable[[np.ndarray], np.ndarray] = terminal_penalty or (

@@ -1,6 +1,6 @@
 import datetime as dt
-from typing import Optional
 from src.wealthplan.cashflows.base import Cashflow
+
 
 class Pension(Cashflow):
     """

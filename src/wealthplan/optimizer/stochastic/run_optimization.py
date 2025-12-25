@@ -16,26 +16,26 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import Su
 
 def main():
     # Simulation dates
-    start_date = dt.date(2025, 10, 1)
-    end_date = dt.date(2075, 10, 1)
+    start_date = dt.date(2026, 1, 1)
+    end_date = dt.date(2035, 12, 1)
     retirement_date = dt.date(2053, 10, 1)
 
     # Cashflows
-    salary = Salary(monthly_salary=6000, retirement_date=retirement_date)
+    salary = Salary(monthly_salary=6800, retirement_date=retirement_date)
     rent = Rent(monthly_rent=1300)
     insurance = LifeInsurance(
-        monthly_payment=100, payout=100000, end_date=dt.date(2053, 10, 1)
+        monthly_payment=100, payout=100000, payout_date=retirement_date
     )
-    pension = Pension(monthly_amount=3100, retirement_date=retirement_date)
-    essential_expenses = EssentialExpenses(monthly_expenses=1500)
-    cashflows = [salary, rent, insurance, pension, essential_expenses]
+    pension = Pension(monthly_amount=3200, retirement_date=retirement_date)
+    #essential_expenses = EssentialExpenses(monthly_expenses=1500)
+    cashflows = [salary, rent, insurance, pension]
 
     # Wealth
-    wealth = Wealth(initial_wealth=100000, yearly_return=0.05)
+    wealth = Wealth(initial_wealth=140000, yearly_return=0.06)
 
     gbm_returns = GBM(
-        mu=0.05,          # mean annual return 5%
-        sigma=0.15,       # volatility 15%
+        mu=0.04,
+        sigma=0.1,
         seed=42
     )
 
@@ -46,10 +46,11 @@ def main():
         seed=123
     )
 
-    n_sims = 1_000
+    n_sims = 1000
 
     # Bellman solver
     bell = StochasticBellmanOptimizer(
+        run_id="test_stochastic",
         gbm_returns=gbm_returns,
         survival_process=survival_process,
         n_sims=n_sims,
@@ -58,6 +59,7 @@ def main():
         wealth=wealth,
         cashflows=cashflows,
         beta=1.0,
+        apply_terminal_penalty=True
     )
 
     bell.solve()

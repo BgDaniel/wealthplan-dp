@@ -31,7 +31,7 @@ class SurvivalProcess:
         seed : Optional[int]
             Random seed
         """
-        if b <= 0 or c <= 0:
+        if b < 0 or c < 0:
             raise ValueError("b and c must be positive for realistic mortality.")
 
         self.b = b
