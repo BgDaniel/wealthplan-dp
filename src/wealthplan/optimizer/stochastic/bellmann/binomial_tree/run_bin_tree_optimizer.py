@@ -31,8 +31,6 @@ def main():
     # Wealth
     wealth_0 = 140_000
 
-    # utilities
-    instant_utility = lambda c: crra_utility(c)
     terminal_penalty = lambda w: -(w**2)
 
     # Bellman solver
@@ -47,7 +45,6 @@ def main():
         r=0.06,
         b=9.5e-5,
         c=0.085,
-        instant_utility=instant_utility,
         terminal_penalty=terminal_penalty,
     )
 

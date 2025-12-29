@@ -21,6 +21,19 @@ from wealthplan.optimizer.stochastic.bellmann.binomial_tree.result_cache import 
 logger = logging.getLogger(__name__)
 
 
+@njit
+def crra_utility_numba(c, gamma=0.5, epsilon=1e-8):
+    n = c.shape[0]
+    u = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        ci = max(c[i], 0.0) + epsilon
+        if gamma == 1.0:
+            u[i] = np.log(ci)
+        else:
+            u[i] = (ci ** (1.0 - gamma)) / (1.0 - gamma)
+    return u
+
+
 @njit(parallel=True)
 def compute_optimal_policy(
     wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, a_grid
@@ -33,13 +46,15 @@ def compute_optimal_policy(
     for i in prange(n_w):
         W = wealth_grid[i]
 
-        a_vals = np.minimum(a_grid[0, :], W)         # vectorized
+        a_vals = np.minimum(a_grid[0, :], W)  # vectorized
         W_up_arr = (W - a_vals) * u
         W_down_arr = (W - a_vals) * d
         V_up_arr = np.interp(W_up_arr, wealth_grid, v_t_next_jp1)
         V_down_arr = np.interp(W_down_arr, wealth_grid, v_t_next_j)
-        instant_util_arr = -(a_vals ** 2)
-        total_val_arr = instant_util_arr + beta * q_t * (p * V_up_arr + (1-p) * V_down_arr)
+        instant_util_arr = crra_utility_numba(a_vals)
+        total_val_arr = instant_util_arr + beta * q_t * (
+            p * V_up_arr + (1 - p) * V_down_arr
+        )
 
         idx_max = np.argmax(total_val_arr)
         v_opt[i] = total_val_arr[idx_max]
@@ -61,7 +76,6 @@ class BinTreeBellmanOptimizer:
         r: float,
         b: float,
         c: float,
-        instant_utility: Callable[[np.ndarray], np.ndarray],
         terminal_penalty: Callable[[np.ndarray], np.ndarray],
         max_wealth: float = 500000.0,
         a_steps: int = 1000,
@@ -94,7 +108,6 @@ class BinTreeBellmanOptimizer:
         self.b = b
         self.c = c
 
-        self.instant_utility = instant_utility
         self.terminal_penalty = terminal_penalty
 
         self.max_wealth = max_wealth
@@ -289,70 +302,101 @@ class BinTreeBellmanOptimizer:
             # Prepare for next iteration
             v_t_next = v_t
 
-    def _roll_forward(self) -> None:
+    def _roll_single_path(self, policy_list, cashflow_list, updown_path: np.ndarray):
         """
-        Given self.policy filled per date and self.wealth_grid, compute
-        opt_wealth, opt_consumption and monthly_cashflows by forward simulation.
+        Roll out a single path along the binomial tree given a fixed sequence of up/down jumps.
+
+        Parameters
+        ----------
+        policy_list : list of np.ndarray
+            Optimal policies per month from cache.
+        cashflow_list : list of float
+            Deterministic cashflows per month.
+        updown_path : np.ndarray of shape (n_months - 1,)
+            Sequence of 0/1 for down/up moves.
+
+        Returns
+        -------
+        wealth_path : np.ndarray
+        consumption_path : np.ndarray
+        cashflow_path : np.ndarray
         """
-        n_months = self.n_months
-        wealth_paths = np.zeros((n_months, self.n_sims))
-        consumption_paths = np.zeros((n_months, self.n_sims))
-        cashflow_paths = np.zeros((n_months, self.n_sims))
+        wealth_path = np.zeros(self.n_months, dtype=np.float32)
+        consumption_path = np.zeros(self.n_months, dtype=np.float32)
+        cashflow_path = np.zeros(self.n_months, dtype=np.float32)
 
-        # month 0
-        wealth_paths[0] = np.full(self.n_sims, self.wealth.initial_wealth)
+        # initial month
+        wealth_path[0] = self.wealth_0
+        cashflow_path[0] = cashflow_list[0]
 
-        cf0 = self.monthly_cashflow(self.months[0])
-        cashflow_paths[0] = np.full(self.n_sims, cf0)
+        # node index at time t=0 is always 0
+        node_idx = 0
+        cons = np.interp(wealth_path[0], self.wealth_grid, policy_list[0][node_idx, :])
+        consumption_path[0] = cons
 
-        _, policy0, _ = self.cache.load_date(self.months[0])
+        # forward roll
+        for t in range(1, self.n_months - 1):
+            W_prev = wealth_path[t - 1]
 
-        for i in range(self.n_sims):
-            consumption_paths[0, i] = float(
-                np.interp(wealth_paths[0][i], self.wealth_grid, policy0[:, i])
+            node_idx = updown_path[:t].sum()
+            cons = np.interp(W_prev, self.wealth_grid, policy_list[t][node_idx, :])
+            consumption_path[t] = cons
+            cashflow_path[t] = cashflow_list[t]
+
+            W_next = W_prev + cashflow_list[t] - cons
+
+            # use provided up/down jump: 1 = up, 0 = down
+            wealth_path[t] = W_next * (self.u if updown_path[t - 1] == 1 else self.d)
+
+        return wealth_path, consumption_path, cashflow_path
+
+    def _roll_forward(self, n_sims: int = 1000, seed: int = 42):
+        """
+        Roll out multiple Monte Carlo sample paths along the binomial tree.
+
+        Parameters
+        ----------
+        n_sims : int
+            Number of paths to simulate.
+        seed : int
+            Random seed for reproducibility.
+        """
+        self.n_sims = n_sims
+
+        rng = np.random.default_rng(seed)
+
+        # prepare policies and cashflows per month
+        policy_list = []
+        cashflow_list = []
+
+        for t_idx, date_t in enumerate(self.months[:-1]):
+            _, policy_t = self.cache.load_date(date_t)
+            policy_list.append(policy_t)
+            cashflow_list.append(self.monthly_cashflow(date_t))
+
+        # generate random up/down paths
+        updown_paths = rng.integers(0, 2, size=(n_sims, self.n_months - 1))
+
+        # initialize storage
+        wealth_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
+        consumption_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
+        cashflow_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
+
+        # simulate each path
+        for sim in range(n_sims):
+            W_path, C_path, CF_path = self._roll_single_path(
+                policy_list, cashflow_list, updown_paths[sim]
             )
+            wealth_paths[:, sim] = W_path
+            consumption_paths[:, sim] = C_path
+            cashflow_paths[:, sim] = CF_path
 
-        current_wealth_paths = (
-            wealth_paths[0] + cf0 - consumption_paths[0]
-        ) * self.monthly_returns[:, 0]
-
-        # forward roll for months 1..n-1 (we only simulate up to n_months - 1)
-        for t in range(1, n_months - 1):
-            date_t = self.months[t]
-            cf_t = self.monthly_cashflow(date_t)
-            cashflow_paths[t] = np.full(self.n_sims, cf_t)
-
-            wealth_paths[t] = current_wealth_paths
-
-            _, policy_t, _ = self.cache.load_date(date_t)
-
-            for i in range(self.n_sims):
-                consumption_paths[t, i] = float(
-                    np.interp(wealth_paths[t][i], self.wealth_grid, policy_t[:, i])
-                )
-
-            # wealth for next month (record current after return)
-            current_wealth_paths = (
-                current_wealth_paths + cf_t - consumption_paths[t, i]
-            ) * self.monthly_returns[:, t]
-
-        # Final index handling (set last month values)
-        if n_months >= 2:
-            # set last month's cashflow (could be zero) and consumption via interpolation
-            final_idx = n_months - 1
-            date_f = self.months[final_idx]
-            cashflow_paths[final_idx] = np.full(
-                self.n_sims, self.monthly_cashflow(date_f)
-            )
-
-            wealth_paths[final_idx] = current_wealth_paths
-
-        # Save as pandas Dataframe indexed by months
+        # store as DataFrames for plotting
         self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
         self.opt_consumption = pd.DataFrame(consumption_paths, index=self.months)
         self.monthly_cashflows = pd.DataFrame(cashflow_paths, index=self.months)
 
-    def solve(self) -> None:
+    def solve(self, n_sims: int = 1000, seed: int = 42) -> None:
         """Solve with backward induction (or load cache if available), then roll forward.
         Returns (value_function, policy).
         """
@@ -361,7 +405,7 @@ class BinTreeBellmanOptimizer:
         self._backward_induction()
 
         logger.info("Rolling forward to get paths.")
-        self._roll_forward()
+        self._roll_forward(n_sims=n_sims, seed=seed)
 
         logger.info("BellmanOptimizer.solve() finished.")
 
@@ -421,8 +465,6 @@ class BinTreeBellmanOptimizer:
         cons_mean, cons_bands = mean_and_bands(self.opt_consumption)
         wealth_mean, wealth_bands = mean_and_bands(self.opt_wealth)
 
-        surv_mean = pd.DataFrame(self.survival_paths.T, index=months).mean(axis=1)
-
         det_cf = (
             self.monthly_cashflows.iloc[:, 0]
             if isinstance(self.monthly_cashflows, pd.DataFrame)
@@ -435,7 +477,7 @@ class BinTreeBellmanOptimizer:
         # ============================
         # Plotting
         # ============================
-        fig, axes = plt.subplots(3, 1, figsize=(18, 20), sharex=False)
+        fig, axes = plt.subplots(3, 1, figsize=(14, 16), sharex=False)
 
         def thousands_formatter(x, pos):
             return f"{x:,.0f}"
@@ -454,7 +496,20 @@ class BinTreeBellmanOptimizer:
                 )
 
             if retirement_date:
-                ax.axvline(retirement_date, color="red", linestyle="--")
+                ax.axvline(
+                    retirement_date,
+                    color="red",
+                    linestyle="--",
+                    lw=2,
+                    label="Retirement",
+                )
+                ax.text(
+                    retirement_date,
+                    ax.get_ylim()[1] * 0.9,
+                    "Retirement",
+                    color="red",
+                    rotation=90,
+                )
 
             ax.set_title(title)
             ax.legend()
@@ -489,6 +544,7 @@ class BinTreeBellmanOptimizer:
             label="Deterministic Cashflows",
         )
         axes[0].legend()
+        axes[0].set_ylim((0.0, 20_000))
 
         # --- 2. Wealth ---
         plot_with_bands(
@@ -510,14 +566,15 @@ class BinTreeBellmanOptimizer:
         )
         axes[1].legend()
 
-        # --- 3. Survival (mean only) ---
-        axes[2].plot(months, surv_mean, color="tab:purple", lw=2)
-        if retirement_date:
-            axes[2].axvline(retirement_date, color="red", linestyle="--")
-        axes[2].set_title("Survival Probability Over Time")
-        axes[2].legend()
-        axes[2].grid(alpha=0.3)
-        axes[2].set_xlabel("Date")
+        # 4. Cumulative survival probability
+        cumulative_survival = np.cumprod(self.survival_probs)
+        age_grid = self.current_age + self.time_grid
+
+        axes[2].plot(age_grid, cumulative_survival, color="tab:orange", lw=2)
+        axes[2].set_title("Survival Probability")
+        axes[2].set_xlabel("Age")
+        axes[2].grid(True)
+        axes[2].set_ylim(0, 1.05)
 
         plt.tight_layout()
         plt.show()

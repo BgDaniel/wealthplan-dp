@@ -9,9 +9,6 @@ from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
 
 
-from src.wealthplan.optimizer.deterministic.base_optimizer import (
-    BaseConsumptionOptimizer,
-)
 from wealthplan.cashflows.base import Cashflow
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.result_cache import ResultCache
@@ -60,7 +57,7 @@ def interp_2d(
     return v_next_interp
 
 
-class LSMCBellmanOptimizer():
+class LSMCBellmanOptimizer:
     def __init__(
         self,
         run_id: str,
@@ -78,7 +75,7 @@ class LSMCBellmanOptimizer():
         beta: float = 1.0,
         r_squared_threshold: float = 0.8,
         save: bool = True,
-        apply_terminal_penalty: bool = True
+        apply_terminal_penalty: bool = True,
     ) -> None:
         """
         Initialize the stochastic Bellman optimizer.
@@ -119,9 +116,7 @@ class LSMCBellmanOptimizer():
             n_sims=n_sims, dates=self.months
         )
 
-        self.wealth_grid = np.arange(
-            0.0, self.max_wealth, self.delta, dtype=np.float32
-        )
+        self.wealth_grid = np.arange(0.0, self.max_wealth, self.delta, dtype=np.float32)
 
         self.r_squared_threshold = r_squared_threshold
 
@@ -450,9 +445,9 @@ class LSMCBellmanOptimizer():
         logger.info("BellmanOptimizer.solve() finished.")
 
     def plot(
-            self,
-            percentiles: tuple[float, ...] = (5, 10),
-            sample_sim: Optional[int] = None,
+        self,
+        percentiles: tuple[float, ...] = (5, 10),
+        sample_sim: Optional[int] = None,
     ):
         """
         Plot stochastic results with mean + percentile bands, a sample path,
@@ -505,9 +500,7 @@ class LSMCBellmanOptimizer():
         cons_mean, cons_bands = mean_and_bands(self.opt_consumption)
         wealth_mean, wealth_bands = mean_and_bands(self.opt_wealth)
 
-        surv_mean = pd.DataFrame(
-            self.survival_paths.T, index=months
-        ).mean(axis=1)
+        surv_mean = pd.DataFrame(self.survival_paths.T, index=months).mean(axis=1)
 
         det_cf = (
             self.monthly_cashflows.iloc[:, 0]
@@ -531,10 +524,12 @@ class LSMCBellmanOptimizer():
 
             for i, (p, (lo, hi)) in enumerate(bands.items()):
                 ax.fill_between(
-                    x, lo, hi,
+                    x,
+                    lo,
+                    hi,
                     color=color,
                     alpha=0.15 + 0.15 * i,
-                    label=f"{p}–{100 - p}%"
+                    label=f"{p}–{100 - p}%",
                 )
 
             if retirement_date:
@@ -548,42 +543,54 @@ class LSMCBellmanOptimizer():
 
         # --- 1. Consumption ---
         plot_with_bands(
-            axes[0], months, cons_mean, cons_bands,
+            axes[0],
+            months,
+            cons_mean,
+            cons_bands,
             color="tab:green",
             title="Optimal Consumption Over Time",
             yfmt=True,
         )
         axes[0].plot(
-            cons_sample.index, cons_sample.values,
-            color="red", lw=1.0, alpha=0.8,
-            label="Sample Path"
+            cons_sample.index,
+            cons_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
         )
         axes[0].plot(
-            det_cf.index, det_cf.values,
-            color="blue", linestyle="--", lw=1.0,
-            label="Deterministic Cashflows"
+            det_cf.index,
+            det_cf.values,
+            color="blue",
+            linestyle="--",
+            lw=1.0,
+            label="Deterministic Cashflows",
         )
         axes[0].legend()
 
         # --- 2. Wealth ---
         plot_with_bands(
-            axes[1], months, wealth_mean, wealth_bands,
+            axes[1],
+            months,
+            wealth_mean,
+            wealth_bands,
             color="tab:blue",
             title="Wealth Over Time",
             yfmt=True,
         )
         axes[1].plot(
-            wealth_sample.index, wealth_sample.values,
-            color="red", lw=1.0, alpha=0.8,
-            label="Sample Path"
+            wealth_sample.index,
+            wealth_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
         )
         axes[1].legend()
 
         # --- 3. Survival (mean only) ---
-        axes[2].plot(
-            months, surv_mean,
-            color="tab:purple", lw=2
-        )
+        axes[2].plot(months, surv_mean, color="tab:purple", lw=2)
         if retirement_date:
             axes[2].axvline(retirement_date, color="red", linestyle="--")
         axes[2].set_title("Survival Probability Over Time")
