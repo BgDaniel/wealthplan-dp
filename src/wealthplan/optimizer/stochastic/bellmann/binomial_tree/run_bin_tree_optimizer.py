@@ -37,7 +37,7 @@ def main():
 
     # Bellman solver
     bell = BinTreeBellmanOptimizer(
-        run_id="test_stochastic",
+        run_id="test_bin_tree_optimizer",
         start_date=start_date,
         end_date=end_date,
         current_age=37,

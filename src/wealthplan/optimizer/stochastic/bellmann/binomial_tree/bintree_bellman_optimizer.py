@@ -1,32 +1,51 @@
 import logging
 import datetime as dt
 import math
-from typing import Dict, Tuple, Optional, List, Callable
+from numba import njit, prange
+from typing import Dict, Optional, List, Callable
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import numba as nb
+from joblib import Parallel, delayed
 from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
 
 
-from src.wealthplan.optimizer.deterministic.base_optimizer import (
-    BaseConsumptionOptimizer,
-)
 from wealthplan.cashflows.base import Cashflow
-from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
-from wealthplan.optimizer.stochastic.result_cache import ResultCache
-from wealthplan.optimizer.stochastic.survival_process.survival_process import (
-    SurvivalProcess,
+
+from wealthplan.optimizer.stochastic.bellmann.binomial_tree.result_cache import (
+    ResultCache,
 )
-from wealthplan.optimizer.stochastic.wealth_regression.wealth_regression import (
-    WealthRegressor,
-)
+
 
 logger = logging.getLogger(__name__)
 
 
+@njit(parallel=True)
+def compute_optimal_policy(
+    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, a_grid
+):
+    n_w = wealth_grid.shape[0]
 
+    v_opt = np.zeros(n_w, dtype=np.float32)
+    consumption_opt = np.zeros(n_w, dtype=np.float32)
+
+    for i in prange(n_w):
+        W = wealth_grid[i]
+
+        a_vals = np.minimum(a_grid[0, :], W)         # vectorized
+        W_up_arr = (W - a_vals) * u
+        W_down_arr = (W - a_vals) * d
+        V_up_arr = np.interp(W_up_arr, wealth_grid, v_t_next_jp1)
+        V_down_arr = np.interp(W_down_arr, wealth_grid, v_t_next_j)
+        instant_util_arr = -(a_vals ** 2)
+        total_val_arr = instant_util_arr + beta * q_t * (p * V_up_arr + (1-p) * V_down_arr)
+
+        idx_max = np.argmax(total_val_arr)
+        v_opt[i] = total_val_arr[idx_max]
+        consumption_opt[i] = a_vals[idx_max]
+
+    return v_opt, consumption_opt
 
 
 class BinTreeBellmanOptimizer:
@@ -45,9 +64,11 @@ class BinTreeBellmanOptimizer:
         instant_utility: Callable[[np.ndarray], np.ndarray],
         terminal_penalty: Callable[[np.ndarray], np.ndarray],
         max_wealth: float = 500000.0,
+        a_steps: int = 1000,
         delta: float = 500.0,
         beta: float = 1.0,
         save: bool = True,
+        parallelize: bool = False,
     ) -> None:
         """
         Initialize the stochastic Bellman optimizer.
@@ -77,6 +98,8 @@ class BinTreeBellmanOptimizer:
         self.terminal_penalty = terminal_penalty
 
         self.max_wealth = max_wealth
+        self.a_steps = a_steps
+
         self.delta = delta
 
         self.beta: float = beta
@@ -88,8 +111,11 @@ class BinTreeBellmanOptimizer:
         self.n_months = len(self.months)
 
         self.wealth_grid = np.arange(0.0, self.max_wealth, self.delta, dtype=np.float32)
+        self.n_steps = len(self.wealth_grid)
 
         self.save = save
+
+        self.parallelize = parallelize
 
         self.run_id = run_id
 
@@ -115,8 +141,7 @@ class BinTreeBellmanOptimizer:
 
         # Integrated hazard over [t, t+dt]
         hazard_integral = (self.b / self.c) * (
-                np.exp(self.c * (age_t + self.dt))
-                - np.exp(self.c * age_t)
+            np.exp(self.c * (age_t + self.dt)) - np.exp(self.c * age_t)
         )
 
         # Conditional survival probabilities q_t
@@ -133,202 +158,136 @@ class BinTreeBellmanOptimizer:
         """Sum deterministic cashflows for the given month."""
         return sum(cf.cashflow(date) for cf in self.cashflows)
 
-    def _regress_value_function(
-        self,
-        date_t: dt.date,
-        v_next: np.ndarray,
-        returns_paths: np.ndarray,
-        survival_paths: np.ndarray,
-        plot: bool = True,
-    ) -> np.ndarray:
+    def _compute_optimal_policy(
+        self, j: int, v_t_next: list, q_t: float, a_grid: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Regress the value function over wealth, returns, and survival paths.
-
-        Parameters
-        ----------
-        v_next : np.ndarray, shape (n_w, n_sims)
-            Value function or continuation values to regress.
-        returns_paths : np.ndarray, shape (n_sims,)
-            Simulated returns for the current time step.
-        survival_paths : np.ndarray, shape (n_sims,)
-            Survival indicator/probabilities for the current time step.
+        Compute value function and policy for one stock/tree node (vectorized over wealth and consumption).
 
         Returns
         -------
-        np.ndarray
-            Regressed value function, same shape as v_next.
-
-        Raises
-        ------
-        RuntimeError
-            If the regression R-squared falls below self.r_squared_threshold.
+        v_node : np.ndarray
+            Optimal value function for this node (shape: n_wealth,)
+        policy_node : np.ndarray
+            Optimal consumption for this node (shape: n_wealth,)
         """
-        # Setup the regressor
-        regressor = WealthRegressor(
-            wealth_grid=self.wealth_grid,
-            returns=returns_paths,
-            survival_paths=survival_paths,
+        n_w = len(self.wealth_grid)
+        W_mat = self.wealth_grid[:, np.newaxis]  # (n_w, 1)
+        a_mat = np.minimum(a_grid, W_mat)  # (n_w, n_a)
+
+        # Wealth next period
+        W_up = (W_mat - a_mat) * self.u
+        W_down = (W_mat - a_mat) * self.d
+
+        # Interpolate continuation value
+        V_up = np.array(
+            [
+                np.interp(W_up[i, :], self.wealth_grid, v_t_next[j + 1])
+                for i in range(n_w)
+            ]
+        )
+        V_down = np.array(
+            [np.interp(W_down[i, :], self.wealth_grid, v_t_next[j]) for i in range(n_w)]
         )
 
-        # Perform regression
-        try:
-            v_regressed, r_squared = regressor.regress(v_next=v_next)
-        except RuntimeError as e:
-            regressor.plot_regression_fit_1d(v_next)
-            regressor.plot_regression_fit_2d(v_next, self.n_sims)
+        continuation = q_t * (self.p * V_up + (1 - self.p) * V_down)
 
-            raise e
+        # Instant utility
+        instant_util = self.instant_utility(a_mat)  # vectorized
 
-        self.r_squared[date_t] = r_squared
+        total_values = instant_util + self.beta * continuation
 
-        # regressor.plot_regression_fit_1d(v_next)
-        # regressor.plot_regression_fit_2d(v_next, self.n_sims)
+        # Optimal consumption
+        idx_opt = np.argmax(total_values, axis=1)
+        v_opt = total_values[np.arange(n_w), idx_opt]
+        comsumption_opt = a_mat[np.arange(n_w), idx_opt]
 
-        # Check threshold
-        if r_squared < self.r_squared_threshold:
-            # Raise error afterwards
-            if plot:
-                regressor.plot_regression_fit_1d(v_next)
-                regressor.plot_regression_fit_2d(v_next, self.n_sims)
-
-            raise RuntimeError(
-                f"Fit R-squared = {r_squared:.4f} below threshold {self.r_squared_threshold}"
-            )
-
-        return v_regressed
-
-    def _compute_available_wealth(self, cf_t: float):
-        """Compute available wealth and candidate consumption grid."""
-        available = self.wealth_grid[:, None] + cf_t
-        available = np.repeat(available, self.n_sims, axis=1)  # (n_w, n_sims)
-
-        n_c = int(np.ceil(np.max(available) / self.c_step)) + 1
-        c_grid = np.arange(0.0, n_c * self.c_step, self.c_step, dtype=np.float32)
-
-        return available, c_grid
-
-    def _compute_value_candidates(
-        self, c_grid: np.ndarray, v_next_interp: np.ndarray, t: int, beta: float
-    ) -> np.ndarray:
-        """Compute total value including instantaneous utility, vectorized over simulations."""
-        instant_util = self.instant_utility(c_grid)  # shape (n_c,)
-
-        # Repeat across simulations
-        instant_util = np.tile(
-            instant_util[:, None], (1, self.n_sims)
-        )  # shape (n_c, n_sims)
-
-        # Set utility to 0 where dead
-        instant_util *= self.survival_paths[:, t][
-            None, :
-        ]  # broadcast survival_paths over n_c
-
-        # Add continuation value (v_next_interp is shape (n_w, n_c, n_sims))
-        value_candidates = (
-            instant_util[None, :, :] + beta * v_next_interp
-        )  # shape (n_w, n_c, n_sims)
-
-        return value_candidates
-
-    def _select_best_policy(
-        self, value_candidates: np.ndarray, w_next: np.ndarray, c_grid: np.ndarray
-    ):
-        """Select best consumption for each (wealth, simulation) point."""
-        feasible_mask = w_next >= 0
-        feasible_values = np.where(feasible_mask, value_candidates, -np.inf)
-        best_idx = np.argmax(feasible_values, axis=1)
-
-        n_w = value_candidates.shape[0]
-        s_idx = np.arange(self.n_sims)[None, :]
-        w_idx = np.arange(n_w)[:, None]
-
-        optimal_value = value_candidates[w_idx, best_idx, s_idx]
-        optimal_policy = c_grid[best_idx]  # (n_w, n_sims)
-        return optimal_value, optimal_policy
+        return v_opt, comsumption_opt
 
     def _backward_induction(self) -> None:
         """
         Compute value function and policy by backward induction on discrete grids.
         Results are stored in self.value_function and self.policy keyed by date.
+        Handles binomial tree structure for risky asset and survival probabilities.
         """
-        # initialize terminal value
-        v_next = np.array(
-                [self.terminal_penalty(w) for w in self.wealth_grid], dtype=np.float32
-            )  # (n_w, n_sims)
+        n_w = len(self.wealth_grid)
+        n_t = self.n_months
 
-        self.monthly_returns = self.returns_paths[:, 1:] / self.returns_paths[:, :-1]
+        # -------------------------
+        # Initialize terminal value
+        # -------------------------
+        v_terminal = self.terminal_penalty(self.wealth_grid)
+        v_t_next = np.array([v_terminal.copy() for _ in range(n_t)])
 
-        beta = self.beta
+        # Consumption grid
+        a_grid = np.linspace(0, self.max_wealth, self.a_steps, dtype=np.float32)[
+            np.newaxis, :
+        ]  # shape (1, n_a)
 
-        # iterate backwards (skip terminal period)
-        for t in tqdm(
-            reversed(range(self.n_months - 1)),
-            total=max(0, self.n_months - 1),
-            desc="Backward Induction",
+        # -------------------------
+        # Backward induction
+        # -------------------------
+        for t_idx in tqdm(
+            reversed(range(n_t - 1)),  # loop backwards
+            total=n_t - 1,  # total steps for the progress bar
+            desc="Backward Induction",  # description
         ):
-            date_t = self.months[t]
+            date_t = self.months[t_idx]
+            q_t = self.survival_probs[t_idx]
 
             # Check cache
             if self.cache.has(date_t):
                 logger.info("Cache hit for %s", date_t)
 
-                optimal_value, optimal_policy, r_sq = self.cache.load_date(date_t)
+                v_t, policy_t = self.cache.load_date(date_t)
 
-                self.value_function[date_t] = optimal_value
-                self.policy[date_t] = optimal_policy
-                self.r_squared[date_t] = r_sq
+                self.value_function[date_t] = v_t
+                self.policy[date_t] = policy_t
 
-                v_next = optimal_value
+                v_t_next = v_t
                 continue
 
-            # Regression of continuation value
-            v_regressed = self._regress_value_function(
-                date_t,
-                v_next,
-                self.returns_paths[:, t - 1],
-                self.survival_paths[:, t - 1],
-            )  # (n_w, n_sims)
+            n_s = t_idx + 1  # number of stock nodes at this time
+            v_t = np.zeros((n_s, n_w), dtype=np.float32)
+            policy_t = np.zeros((n_s, n_w), dtype=np.float32)
 
-            cf_t = self.monthly_cashflow(date_t)
+            results = []
 
-            # Candidate consumption grid and available wealth
-            available, c_grid = self._compute_available_wealth(
-                cf_t
-            )  #   # (n_w, n_sims), (n_c)
+            if self.parallelize:
+                # Parallel computation over stock nodes
+                results = Parallel(n_jobs=-1)(
+                    delayed(self._compute_optimal_policy)(j, v_t_next, q_t, a_grid)
+                    for j in range(n_s)
+                )
+            else:
+                for j in range(n_s):
+                    results.append(
+                        compute_optimal_policy(
+                            self.wealth_grid,
+                            self.u,
+                            self.d,
+                            self.p,
+                            self.beta,
+                            np.array(v_t_next[j], dtype=np.float32),  # down node
+                            np.array(v_t_next[j + 1], dtype=np.float32),  # up node
+                            q_t,
+                            a_grid,
+                        )
+                    )
 
-            # Next-period wealth for all (w, c, sims)
-            w_next = (
-                available[:, None, :] - c_grid[None, :, None]
-            ) * self.monthly_returns[:, t][
-                None, None, :
-            ]  # (n_w, n_c, n_sims)
-
-            # Interpolate continuation value over wealth
-            v_next_interp = interp_2d(w_next, self.wealth_grid, v_regressed)
-
-            # Compute total value including instant utility
-            value_candidates = self._compute_value_candidates(
-                c_grid, v_next_interp, t, beta
-            )
-
-            # Enforce feasibility and select best consumption
-            optimal_value, optimal_policy = self._select_best_policy(
-                value_candidates, w_next, c_grid
-            )
+            # Collect results
+            for j, (v_opt, comsumption_opt) in enumerate(results):
+                v_t[j] = v_opt
+                policy_t[j] = comsumption_opt
 
             # Store results
-            self.value_function[date_t] = optimal_value.copy()
-            self.policy[date_t] = optimal_policy.copy()
+            self.value_function[date_t] = v_t.copy()
+            self.policy[date_t] = policy_t.copy()
 
-            self.cache.store_date(
-                date_t=date_t,
-                value_function=optimal_value,
-                policy=optimal_policy,
-                r_squared=self.r_squared[date_t],
-            )
+            self.cache.store_date(date_t=date_t, value_function=v_t, policy=policy_t)
 
-            # Step backwards
-            v_next = optimal_value
+            # Prepare for next iteration
+            v_t_next = v_t
 
     def _roll_forward(self) -> None:
         """
