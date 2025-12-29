@@ -1,6 +1,7 @@
 import logging
 import datetime as dt
-from typing import Dict, Tuple, Optional
+import math
+from typing import Dict, Tuple, Optional, List, Callable
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -12,6 +13,7 @@ import matplotlib.pyplot as plt
 from src.wealthplan.optimizer.deterministic.base_optimizer import (
     BaseConsumptionOptimizer,
 )
+from wealthplan.cashflows.base import Cashflow
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.result_cache import ResultCache
 from wealthplan.optimizer.stochastic.survival_process.survival_process import (
@@ -24,57 +26,28 @@ from wealthplan.optimizer.stochastic.wealth_regression.wealth_regression import 
 logger = logging.getLogger(__name__)
 
 
-@nb.njit(parallel=True)
-def interp_2d(
-    w_next: np.ndarray, wealth_grid: np.ndarray, v_regressed: np.ndarray
-) -> np.ndarray:
-    """
-    Perform 2D interpolation of regressed continuation values along wealth for each simulation.
-
-    Parameters
-    ----------
-    w_next : np.ndarray, shape (n_w, n_c, n_sims)
-        Wealth points to interpolate to.
-    wealth_grid : np.ndarray, shape (n_w,)
-        Grid of wealth points corresponding to v_regressed.
-    v_regressed : np.ndarray, shape (n_w, n_sims)
-        Regressed continuation values.
-
-    Returns
-    -------
-    np.ndarray, shape (n_w, n_c, n_sims)
-        Interpolated continuation values at `w_next`.
-    """
-    n_w, n_c, n_sims = w_next.shape
-    v_next_interp = np.empty_like(w_next, dtype=np.float32)
-
-    for s in nb.prange(n_sims):
-        for i in range(n_w):
-            # np.interp is not natively supported by Numba, so we need a workaround
-            # But if using object mode or JIT with nopython=False, it will work
-            v_next_interp[i, :, s] = np.interp(
-                w_next[i, :, s], wealth_grid, v_regressed[:, s]
-            )
-
-    return v_next_interp
 
 
-class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
+
+class BinTreeBellmanOptimizer:
     def __init__(
         self,
         run_id: str,
-        gbm_returns: GBM,
-        survival_process: SurvivalProcess,
-        n_sims: int,
-        w_max: float = 500000.0,
-        w_min: float = 0.0,
-        w_step: float = 1000.0,
-        c_step: float = 500.0,
-        r_squared_threshold: float = 0.8,
+        start_date: dt.date,
+        end_date: dt.date,
+        current_age: int,
+        wealth_0: float,
+        cashflows: List[Cashflow],
+        sigma: float,
+        r: float,
+        b: float,
+        c: float,
+        instant_utility: Callable[[np.ndarray], np.ndarray],
+        terminal_penalty: Callable[[np.ndarray], np.ndarray],
+        max_wealth: float = 500000.0,
+        delta: float = 500.0,
+        beta: float = 1.0,
         save: bool = True,
-        apply_terminal_penalty: bool = True,
-        *args,
-        **kwargs,
     ) -> None:
         """
         Initialize the stochastic Bellman optimizer.
@@ -87,30 +60,34 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
             Survival / mortality process
         *args, **kwargs : forwarded to BaseConsumptionOptimizer
         """
-        super().__init__(
-            w_max=w_max, w_min=w_min, w_step=w_step, c_step=c_step, *args, **kwargs
-        )
+        self.start_date: dt.date = start_date
+        self.end_date: dt.date = end_date
 
-        self.gbm_returns = gbm_returns
-        self.survival_process = survival_process
+        self.current_age = current_age
 
-        self.n_sims = n_sims
+        self.wealth_0 = wealth_0
+        self.cashflows: List[Cashflow] = cashflows
 
-        self.returns_paths: np.ndarray = self.gbm_returns.simulate(
-            n_sims=n_sims, dates=self.months
-        )
+        self.sigma = sigma
+        self.r = r
+        self.b = b
+        self.c = c
 
-        self.survival_paths: np.ndarray = self.survival_process.simulate(
-            n_sims=n_sims, dates=self.months
-        )
+        self.instant_utility = instant_utility
+        self.terminal_penalty = terminal_penalty
 
-        self.wealth_grid = np.arange(
-            self.w_min, self.w_max, self.w_step, dtype=np.float32
-        )
+        self.max_wealth = max_wealth
+        self.delta = delta
 
-        self.r_squared_threshold = r_squared_threshold
+        self.beta: float = beta
 
-        self.r_squared = {}
+        self.months = [
+            d.date()
+            for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
+        ]
+        self.n_months = len(self.months)
+
+        self.wealth_grid = np.arange(0.0, self.max_wealth, self.delta, dtype=np.float32)
 
         self.save = save
 
@@ -118,7 +95,43 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
 
         self.cache = ResultCache(enabled=save, run_id=run_id)
 
-        self._apply_terminal_penalty = apply_terminal_penalty
+        self.save: bool = save
+
+        self.dt = 1.0 / 12.0
+        self.sqrt_dt = math.sqrt(self.dt)
+
+        self.u = math.exp(self.sigma * self.sqrt_dt)
+        self.d = 1.0 / self.u
+
+        self.p = (math.exp(self.r * self.dt) - self.d) / (self.u - self.d)
+        self.q = 1.0 - self.p
+
+        self.time_grid = np.array(
+            [(m - self.months[0]).days / 365.0 for m in self.months],
+            dtype=np.float64,
+        )
+
+        age_t = self.current_age + self.time_grid
+
+        # Integrated hazard over [t, t+dt]
+        hazard_integral = (self.b / self.c) * (
+                np.exp(self.c * (age_t + self.dt))
+                - np.exp(self.c * age_t)
+        )
+
+        # Conditional survival probabilities q_t
+        self.survival_probs = np.exp(-hazard_integral)
+
+        # outputs (to be populated by solve())
+        self.value_function: Dict[dt.date, np.ndarray] = {}
+        self.policy: Dict[dt.date, np.ndarray] = {}
+        self.opt_wealth: pd.DataFrame = pd.DataFrame(dtype=float)
+        self.opt_consumption: pd.DataFrame = pd.DataFrame(dtype=float)
+        self.monthly_cashflows: pd.DataFrame = pd.DataFrame(dtype=float)
+
+    def monthly_cashflow(self, date: dt.date) -> float:
+        """Sum deterministic cashflows for the given month."""
+        return sum(cf.cashflow(date) for cf in self.cashflows)
 
     def _regress_value_function(
         self,
@@ -233,40 +246,15 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         optimal_policy = c_grid[best_idx]  # (n_w, n_sims)
         return optimal_value, optimal_policy
 
-    def _compute_terminal_value(self) -> np.ndarray:
-        """
-        Compute the terminal value function over the wealth grid.
-
-        If self._apply_terminal_penalty is True, use terminal_penalty.
-        Otherwise, use instant utility with survival paths for the terminal period.
-
-        Returns
-        -------
-        np.ndarray
-            Terminal value function of shape (n_w, n_sims)
-        """
-        if self._apply_terminal_penalty:
-            # Standard terminal penalty
-            v_terminal = np.array(
-                [self.terminal_penalty(w) for w in self.wealth_grid], dtype=np.float32
-            )
-            v_next = np.tile(v_terminal[:, np.newaxis], (1, self.n_sims))
-        else:
-            # Instant utility at terminal wealth
-            instant_util = self.instant_utility(self.wealth_grid)  # shape (n_w,)
-            v_next = np.tile(instant_util[:, None], (1, self.n_sims))
-            # Set utility to 0 where dead
-            v_next *= self.survival_paths[:, -1][None, :]
-
-        return v_next
-
     def _backward_induction(self) -> None:
         """
         Compute value function and policy by backward induction on discrete grids.
         Results are stored in self.value_function and self.policy keyed by date.
         """
         # initialize terminal value
-        v_next = self._compute_terminal_value()  # (n_w, n_sims)
+        v_next = np.array(
+                [self.terminal_penalty(w) for w in self.wealth_grid], dtype=np.float32
+            )  # (n_w, n_sims)
 
         self.monthly_returns = self.returns_paths[:, 1:] / self.returns_paths[:, :-1]
 
@@ -293,6 +281,14 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
                 v_next = optimal_value
                 continue
 
+            # Regression of continuation value
+            v_regressed = self._regress_value_function(
+                date_t,
+                v_next,
+                self.returns_paths[:, t - 1],
+                self.survival_paths[:, t - 1],
+            )  # (n_w, n_sims)
+
             cf_t = self.monthly_cashflow(date_t)
 
             # Candidate consumption grid and available wealth
@@ -306,14 +302,6 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
             ) * self.monthly_returns[:, t][
                 None, None, :
             ]  # (n_w, n_c, n_sims)
-
-            # Regression of continuation value
-            v_regressed = self._regress_value_function(
-                date_t,
-                v_next,
-                self.returns_paths[:, t - 1],
-                self.survival_paths[:, t - 1],
-            )  # (n_w, n_sims)
 
             # Interpolate continuation value over wealth
             v_next_interp = interp_2d(w_next, self.wealth_grid, v_regressed)
@@ -419,9 +407,9 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         logger.info("BellmanOptimizer.solve() finished.")
 
     def plot(
-            self,
-            percentiles: tuple[float, ...] = (5, 10),
-            sample_sim: Optional[int] = None,
+        self,
+        percentiles: tuple[float, ...] = (5, 10),
+        sample_sim: Optional[int] = None,
     ):
         """
         Plot stochastic results with mean + percentile bands, a sample path,
@@ -474,9 +462,7 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
         cons_mean, cons_bands = mean_and_bands(self.opt_consumption)
         wealth_mean, wealth_bands = mean_and_bands(self.opt_wealth)
 
-        surv_mean = pd.DataFrame(
-            self.survival_paths.T, index=months
-        ).mean(axis=1)
+        surv_mean = pd.DataFrame(self.survival_paths.T, index=months).mean(axis=1)
 
         det_cf = (
             self.monthly_cashflows.iloc[:, 0]
@@ -500,10 +486,12 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
 
             for i, (p, (lo, hi)) in enumerate(bands.items()):
                 ax.fill_between(
-                    x, lo, hi,
+                    x,
+                    lo,
+                    hi,
                     color=color,
                     alpha=0.15 + 0.15 * i,
-                    label=f"{p}–{100 - p}%"
+                    label=f"{p}–{100 - p}%",
                 )
 
             if retirement_date:
@@ -517,42 +505,54 @@ class StochasticBellmanOptimizer(BaseConsumptionOptimizer):
 
         # --- 1. Consumption ---
         plot_with_bands(
-            axes[0], months, cons_mean, cons_bands,
+            axes[0],
+            months,
+            cons_mean,
+            cons_bands,
             color="tab:green",
             title="Optimal Consumption Over Time",
             yfmt=True,
         )
         axes[0].plot(
-            cons_sample.index, cons_sample.values,
-            color="red", lw=1.0, alpha=0.8,
-            label="Sample Path"
+            cons_sample.index,
+            cons_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
         )
         axes[0].plot(
-            det_cf.index, det_cf.values,
-            color="blue", linestyle="--", lw=1.0,
-            label="Deterministic Cashflows"
+            det_cf.index,
+            det_cf.values,
+            color="blue",
+            linestyle="--",
+            lw=1.0,
+            label="Deterministic Cashflows",
         )
         axes[0].legend()
 
         # --- 2. Wealth ---
         plot_with_bands(
-            axes[1], months, wealth_mean, wealth_bands,
+            axes[1],
+            months,
+            wealth_mean,
+            wealth_bands,
             color="tab:blue",
             title="Wealth Over Time",
             yfmt=True,
         )
         axes[1].plot(
-            wealth_sample.index, wealth_sample.values,
-            color="red", lw=1.0, alpha=0.8,
-            label="Sample Path"
+            wealth_sample.index,
+            wealth_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
         )
         axes[1].legend()
 
         # --- 3. Survival (mean only) ---
-        axes[2].plot(
-            months, surv_mean,
-            color="tab:purple", lw=2
-        )
+        axes[2].plot(months, surv_mean, color="tab:purple", lw=2)
         if retirement_date:
             axes[2].axvline(retirement_date, color="red", linestyle="--")
         axes[2].set_title("Survival Probability Over Time")

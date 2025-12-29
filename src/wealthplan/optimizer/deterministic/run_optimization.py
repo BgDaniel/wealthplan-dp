@@ -14,8 +14,8 @@ from src.wealthplan.optimizer.deterministic.bellman.bellman_optimizer import (
 
 def main():
     # Simulation dates
-    start_date = dt.date(2025, 10, 1)
-    end_date = dt.date(2075, 10, 1)
+    start_date = dt.date(2026, 1, 1)
+    end_date = dt.date(2066, 1, 1)
     retirement_date = dt.date(2053, 10, 1)
 
     # Cashflows

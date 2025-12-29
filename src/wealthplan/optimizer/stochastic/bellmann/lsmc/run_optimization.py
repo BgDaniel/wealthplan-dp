@@ -1,41 +1,39 @@
 import datetime as dt
 
-from src.wealthplan.cashflows.essential_expenses import EssentialExpenses
-from src.wealthplan.wealth import Wealth
 from src.wealthplan.cashflows.salary import Salary
 from src.wealthplan.cashflows.rent import Rent
 from src.wealthplan.cashflows.pension import Pension
 from src.wealthplan.cashflows.life_insurance import LifeInsurance
-from src.wealthplan.optimizer.stochastic.bellmann.bellman_optimizer import (
-    StochasticBellmanOptimizer,
+from wealthplan.optimizer.stochastic.bellmann.lsmc.lsmc_bellman_optimizer import (
+    LSMCBellmanOptimizer,
 )
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.survival_process.survival_process import SurvivalProcess
-
+from wealthplan.optimizer.utility_functions import crra_utility
 
 
 def main():
     # Simulation dates
     start_date = dt.date(2026, 1, 1)
-    end_date = dt.date(2035, 12, 1)
+    end_date = dt.date(2076, 1, 1)
     retirement_date = dt.date(2053, 10, 1)
 
     # Cashflows
     salary = Salary(monthly_salary=6800, retirement_date=retirement_date)
     rent = Rent(monthly_rent=1300)
     insurance = LifeInsurance(
-        monthly_payment=100, payout=100000, payout_date=retirement_date
+        monthly_payment=130, payout=100000, payout_date=retirement_date
     )
     pension = Pension(monthly_amount=3200, retirement_date=retirement_date)
     #essential_expenses = EssentialExpenses(monthly_expenses=1500)
     cashflows = [salary, rent, insurance, pension]
 
     # Wealth
-    wealth = Wealth(initial_wealth=140000, yearly_return=0.06)
+    wealth_0 = 140_000
 
     gbm_returns = GBM(
-        mu=0.04,
-        sigma=0.1,
+        mu=0.05,
+        sigma=0.0,
         seed=42
     )
 
@@ -48,18 +46,22 @@ def main():
 
     n_sims = 1000
 
+    # utilities
+    instant_utility = lambda c: crra_utility(c)
+    terminal_penalty = lambda w: -(w ** 2)
+
     # Bellman solver
-    bell = StochasticBellmanOptimizer(
+    bell = LSMCBellmanOptimizer(
         run_id="test_stochastic",
+        start_date=start_date,
+        end_date=end_date,
+        wealth_0=wealth_0,
+        cashflows=cashflows,
         gbm_returns=gbm_returns,
         survival_process=survival_process,
         n_sims=n_sims,
-        start_date=start_date,
-        end_date=end_date,
-        wealth=wealth,
-        cashflows=cashflows,
-        beta=1.0,
-        apply_terminal_penalty=True
+        instant_utility=instant_utility,
+        terminal_penalty=terminal_penalty
     )
 
     bell.solve()

@@ -21,7 +21,6 @@ class LifeInsurance(Cashflow):
         self.monthly_payment = monthly_payment
         self.payout = payout
         self.payout_date = payout_date
-        self._payout_delivered = False  # internal flag to ensure payout occurs only once
 
     def cashflow(self, delivery_date: dt.date) -> float:
         """
@@ -30,11 +29,9 @@ class LifeInsurance(Cashflow):
         - Monthly payment is paid every month until payout.
         - Payout occurs once at the first delivery date >= payout_date.
         """
-        cf = -self.monthly_payment  # outflow each month
-
-        # Deliver payout if not delivered yet and delivery_date >= payout_date
-        if self.payout_date and not self._payout_delivered and delivery_date >= self.payout_date:
-            cf += self.payout
-            self._payout_delivered = True
-
-        return cf
+        if self.payout_date == delivery_date:
+            return self.payout
+        elif delivery_date < self.payout_date:
+            return -self.monthly_payment
+        else:
+            return 0.0
