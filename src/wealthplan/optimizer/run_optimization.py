@@ -28,18 +28,18 @@ def main() -> None:
     # Simulation horizon
     # ------------------
     start_date: dt.date = dt.date(2026, 1, 1)
-    end_date: dt.date = dt.date(2029, 1, 1)
+    end_date: dt.date = dt.date(2031, 1, 1)
     retirement_date: dt.date = dt.date(2053, 10, 1)
 
     # ----------
     # Cashflows
     # ----------
     salary: Salary = Salary(
-        monthly_salary=1_000,
+        monthly_salary=3_500,
         retirement_date=retirement_date,
     )
 
-    rent: Rent = Rent(monthly_rent=1_000.0)
+    rent: Rent = Rent(monthly_rent=1_100.0)
 
     insurance: LifeInsurance = LifeInsurance(
         monthly_payment=130.0,
@@ -48,25 +48,25 @@ def main() -> None:
     )
 
     pension: Pension = Pension(
-        monthly_amount=3_200.0,
+        monthly_amount=1_300.0,
         retirement_date=retirement_date,
     )
 
     cashflows: List[Cashflow] = [
         salary,
-        #rent,
-        #insurance,
-        #pension
+        rent,
+        insurance,
+        pension
     ]
 
     # -------
     # Wealth
     # -------
-    initial_wealth: float = 50_000.0
+    initial_wealth: float = 40_000.0
 
-    yearly_return: float = 0.0#0.05
+    yearly_return: float = 0.06
 
-    save = False
+    save = True
 
     # ----------------------------
     # Deterministic Bellman solver
@@ -81,8 +81,8 @@ def main() -> None:
             yearly_return=yearly_return,
             cashflows=cashflows,
             w_max=100_000.0,
-            w_step=100.0,
-            c_step=100.0,
+            w_step=50.0,
+            c_step=50.0,
             save=save
         )
     )
@@ -97,7 +97,7 @@ def main() -> None:
 
     survival_model: SurvivalModel = SurvivalModel(
         b=9.5e-5,
-        c=0.000085#0.085,
+        c=0.085,
     )
 
     current_age: int = 37
@@ -113,10 +113,10 @@ def main() -> None:
         sigma=sigma,
         survival_model=survival_model,
         current_age=current_age,
-        w_max=100_000.0,
-        w_step=100.0,
-        c_step=100.0,
-        stochastic=False,
+        w_max=50_000.0,
+        w_step=50.0,
+        c_step=50.0,
+        stochastic=True,
         save=save
     )
 

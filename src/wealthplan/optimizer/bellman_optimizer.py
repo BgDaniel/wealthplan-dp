@@ -48,7 +48,6 @@ class BellmanOptimizer(ABC):
         instant_utility: UtilityFunction = crra_utility,
         terminal_penalty: PenalityFunction = square_penality,
         dt: float = 1.0 / 12.0,
-        beta: float = 1.0,
         w_max: float = 750000.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
@@ -82,7 +81,7 @@ class BellmanOptimizer(ABC):
         self.terminal_penalty: PenalityFunction = terminal_penalty
 
         self.dt = dt
-        self.beta: float = beta
+        self.beta: float = 1.0 / (1.0 + self.monthly_return)
         self.w_max: float = w_max
         self.w_step: float = w_step
         self.c_step: float = c_step

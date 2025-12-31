@@ -1,12 +1,14 @@
 import logging
 import datetime as dt
+
+from matplotlib.ticker import FuncFormatter
+
 import math
 from numba import njit, prange
 from typing import Optional, List
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
 
 from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
@@ -14,6 +16,9 @@ from wealthplan.cashflows.base import Cashflow
 
 
 from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer
+from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
+    DeterministicBellmanOptimizer,
+)
 from wealthplan.optimizer.math_tools.penality_functions import (
     PenalityFunction,
     square_penality,
@@ -32,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 @njit(parallel=True)
 def compute_optimal_policy(
-    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, cf_t, c_grid
+    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, cf_t, c_step
 ):
     n_w = wealth_grid.shape[0]
 
@@ -42,19 +47,22 @@ def compute_optimal_policy(
     for i in prange(n_w):
         W = wealth_grid[i]
 
-        a_vals = np.minimum(c_grid[0, :], W + cf_t)  # vectorized
-        W_up_arr = (W + cf_t - a_vals) * u
-        W_down_arr = (W + cf_t - a_vals) * d
+        c_cands = np.arange(0.0, W + cf_t + 10e-5, c_step, dtype=np.float32)
+
+        W_up_arr = (W + cf_t - c_cands) * u
+        W_down_arr = (W + cf_t - c_cands) * d
+
         V_up_arr = np.interp(W_up_arr, wealth_grid, v_t_next_jp1)
         V_down_arr = np.interp(W_down_arr, wealth_grid, v_t_next_j)
-        instant_util_arr = crra_utility_numba(a_vals)
+
+        instant_util_arr = crra_utility_numba(c_cands)
         total_val_arr = instant_util_arr + beta * q_t * (
             p * V_up_arr + (1 - p) * V_down_arr
         )
 
         idx_max = np.argmax(total_val_arr)
         v_opt[i] = total_val_arr[idx_max]
-        consumption_opt[i] = a_vals[idx_max]
+        consumption_opt[i] = c_cands[idx_max]
 
     return v_opt, consumption_opt
 
@@ -78,7 +86,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         current_age: int,
         instant_utility: UtilityFunction = crra_utility,
         terminal_penalty: PenalityFunction = square_penality,
-        beta: float = 1.0,
         w_max: float = 750_000.0,
         w_step: float = 500.0,
         c_step: float = 500.0,
@@ -86,6 +93,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         seed: int = 42,
         save: bool = True,
         stochastic: bool = True,
+        dynamic_wealth_grid: bool = True,
     ) -> None:
         """
         Initialize the binomial tree Bellman optimizer.
@@ -101,7 +109,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             cashflows=cashflows,
             instant_utility=instant_utility,
             terminal_penalty=terminal_penalty,
-            beta=beta,
             w_max=w_max,
             w_step=w_step,
             c_step=c_step,
@@ -134,6 +141,33 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # Compute binomial parameters
         self._compute_binomial_params()
 
+        self.dynamic_wealth_grid = dynamic_wealth_grid
+
+        self.opt_wealth_det = None
+
+        if self.dynamic_wealth_grid:
+            self._roll_out_wealth_grid()
+
+    def _roll_out_wealth_grid(self) -> None:
+        deterministic_optimizer: DeterministicBellmanOptimizer = (
+            DeterministicBellmanOptimizer(
+                run_id=self.run_id + "_det",
+                start_date=self.start_date,
+                end_date=self.end_date,
+                retirement_date=self.retirement_date,
+                initial_wealth=self.initial_wealth,
+                yearly_return=self.yearly_return,
+                cashflows=self.cashflows,
+                w_max=self.w_max,
+                w_step=self.w_step,
+                c_step=self.c_step,
+                save=self.save,
+            )
+        )
+
+        deterministic_optimizer.solve()
+        self.opt_wealth_det = deterministic_optimizer.opt_wealth.values
+
     def _compute_binomial_params(self) -> None:
         """
         Compute the binomial tree parameters u (up), d (down), and p (up probability)
@@ -148,57 +182,11 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             self.p: float = (1.0 + self.monthly_return - self.d) / (self.u - self.d)
             self.q: float = 1.0 - self.p
         else:
-            self.u: float = 1.0
-            self.d: float = 1.0
+            self.u: float = 1.0 + self.monthly_return
+            self.d: float = 1.0 + self.monthly_return
 
             self.p: float = 0.5
             self.q: float = 0.5
-
-    def _compute_optimal_policy(
-        self, j: int, v_t_next: list, q_t: float, a_grid: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Compute value function and policy for one stock/tree node (vectorized over wealth and consumption).
-
-        Returns
-        -------
-        v_node : np.ndarray
-            Optimal value function for this node (shape: n_wealth,)
-        policy_node : np.ndarray
-            Optimal consumption for this node (shape: n_wealth,)
-        """
-        n_w = len(self.wealth_grid)
-        W_mat = self.wealth_grid[:, np.newaxis]  # (n_w, 1)
-        a_mat = np.minimum(a_grid, W_mat)  # (n_w, n_a)
-
-        # Wealth next period
-        W_up = (W_mat - a_mat) * self.u
-        W_down = (W_mat - a_mat) * self.d
-
-        # Interpolate continuation value
-        V_up = np.array(
-            [
-                np.interp(W_up[i, :], self.wealth_grid, v_t_next[j + 1])
-                for i in range(n_w)
-            ]
-        )
-        V_down = np.array(
-            [np.interp(W_down[i, :], self.wealth_grid, v_t_next[j]) for i in range(n_w)]
-        )
-
-        continuation = q_t * (self.p * V_up + (1 - self.p) * V_down)
-
-        # Instant utility
-        instant_util = self.instant_utility(a_mat)  # vectorized
-
-        total_values = instant_util + self.beta * continuation
-
-        # Optimal consumption
-        idx_opt = np.argmax(total_values, axis=1)
-        v_opt = total_values[np.arange(n_w), idx_opt]
-        comsumption_opt = a_mat[np.arange(n_w), idx_opt]
-
-        return v_opt, comsumption_opt
 
     def _backward_induction(self) -> None:
         """
@@ -214,11 +202,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # -------------------------
         v_terminal = self.terminal_penalty(self.wealth_grid)
         v_t_next = np.array([v_terminal.copy() for _ in range(n_t)])
-
-        # Consumption grid
-        c_grid = np.arange(0, self.w_max, self.c_step, dtype=np.float32)[
-            np.newaxis, :
-        ]  # shape (1, n_a)
 
         # -------------------------
         # Backward induction
@@ -265,7 +248,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                         np.array(v_t_next[j + 1], dtype=np.float32),  # up node
                         q_t,
                         cf_t,
-                        c_grid,
+                        self.c_step,
                     )
                 )
 
@@ -285,106 +268,72 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             # Prepare for next iteration
             v_t_next = v_t
 
-    def _roll_single_path(
-        self, cashflow_list, updown_path: np.ndarray, survival_path: np.ndarray
-    ):
-        """
-        Roll out a single path along the binomial tree given a fixed sequence of up/down jumps.
-
-        Parameters
-        ----------
-        policy_list : list of np.ndarray
-            Optimal policies per month from cache.
-        cashflow_list : list of float
-            Deterministic cashflows per month.
-        updown_path : np.ndarray of shape (n_months - 1,)
-            Sequence of 0/1 for down/up moves.
-
-        Returns
-        -------
-        wealth_path : np.ndarray
-        consumption_path : np.ndarray
-        cashflow_path : np.ndarray
-        """
-        wealth_path = np.zeros(self.n_months, dtype=np.float32)
-        consumption_path = np.zeros(self.n_months, dtype=np.float32)
-        cashflow_path = np.zeros(self.n_months, dtype=np.float32)
-
-        # initial month
-        wealth_path[0] = self.initial_wealth
-        cashflow_path[0] = cashflow_list[0]
-
-        # node index at time t=0 is always 0
-        node_idx = 0
-        cons = np.interp(
-            wealth_path[0], self.wealth_grid, self.policy[self.months[0]][node_idx, :]
-        )
-        consumption_path[0] = cons
-
-        # forward roll
-        for t in range(1, self.n_months - 1):
-            month = self.months[t]
-
-            if survival_path[t] == 0:
-                # Person is dead: zero everything
-                wealth_path[t] = 0.0
-                consumption_path[t] = 0.0
-                cashflow_path[t] = 0.0
-                continue
-
-            W_prev = wealth_path[t - 1]
-
-            node_idx = updown_path[:t].sum()
-            cons = np.interp(W_prev, self.wealth_grid, self.policy[month][node_idx, :])
-            consumption_path[t] = cons
-            cashflow_path[t] = cashflow_list[t]
-
-            W_next = W_prev + cashflow_list[t] - cons
-
-            # use provided up/down jump: 1 = up, 0 = down
-            wealth_path[t] = W_next * (self.u if updown_path[t - 1] == 1 else self.d)
-
-        return wealth_path, consumption_path, cashflow_path
-
     def _roll_forward(self):
         """
-        Roll out multiple Monte Carlo sample paths along the binomial tree.
-
-        Parameters
-        ----------
-        n_sims : int
-            Number of paths to simulate.
-        seed : int
-            Random seed for reproducibility.
+        Vectorized rollout of multiple Monte Carlo paths along the binomial tree.
         """
         rng = np.random.default_rng(self.seed)
 
-        # prepare policies and cashflows per month
-        cashflow_list = []
+        # prepare deterministic cashflows per month
+        cashflow_list = np.array([self.monthly_cashflow(t) for t in self.months])
 
-        for date_t in self.months[:-1]:
-            cashflow_list.append(self.monthly_cashflow(date_t))
+        # generate random up/down paths: shape (n_sims, n_months-1)
+        updown_paths = rng.integers(0, 2, size=(self.n_months - 1, self.n_sims))
 
-        # generate random up/down paths
-        updown_paths = rng.integers(0, 2, size=(self.n_sims, self.n_months - 1))
-
-        survival_simulations = self.survival_model.simulate_survival(
+        # simulate survival: shape (n_months, n_sims)
+        survival_paths = self.survival_model.simulate_survival(
             self.age_grid, self.dt, self.n_sims
         )
 
-        # initialize storage
-        wealth_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
-        consumption_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
-        cashflow_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
+        # initialize arrays: shape (n_months, n_sims)
+        wealth_paths = np.zeros((self.n_months, self.n_sims))
+        consumption_paths = np.zeros((self.n_months, self.n_sims))
+        cashflow_paths = np.zeros((self.n_months, self.n_sims))
 
-        # simulate each path
-        for sim in range(self.n_sims):
-            W_path, C_path, CF_path = self._roll_single_path(
-                cashflow_list, updown_paths[sim], survival_simulations[:, sim]
+        # initial month
+        wealth_paths[0, :] = self.initial_wealth
+        cashflow_paths[0, :] = cashflow_list[0]
+
+        # consumption for t=0
+        node_idx0 = 0
+        consumption_paths[0, :] = np.interp(
+            wealth_paths[0, :],
+            self.wealth_grid,
+            self.policy[self.months[0]][node_idx0, :],
+        )
+
+        # forward rollout vectorized
+        for t in range(1, self.n_months):
+            month = self.months[t]
+
+            alive_mask = survival_paths[t, :] > 0  # alive sims
+            W_prev = wealth_paths[t - 1, :].copy()
+
+            # wealth update
+            W_next = W_prev + cashflow_list[t] - consumption_paths[t - 1]
+            wealth_paths[t, :] = W_next * np.where(
+                updown_paths[t - 1, :] == 1, self.u, self.d
             )
-            wealth_paths[:, sim] = W_path
-            consumption_paths[:, sim] = C_path
-            cashflow_paths[:, sim] = CF_path
+
+            # compute node indices: cumulative sum of up moves along each path
+            node_idx = updown_paths[:t, :].sum(axis=0)
+
+            if t < self.n_months - 1:
+                for sim_idx in np.where(alive_mask)[0]:
+                    consumption_paths[t, sim_idx] = np.interp(
+                        W_prev[sim_idx],
+                        self.wealth_grid,
+                        self.policy[month][node_idx[sim_idx], :],
+                    )
+
+            cashflow_paths[t, :] = cashflow_list[t]
+
+            # zero out dead paths
+            dead_mask = ~alive_mask
+
+            wealth_paths[t, dead_mask] = 0.0
+            consumption_paths[t, dead_mask] = 0.0
+            cashflow_paths[t, dead_mask] = 0.0
 
         # store as DataFrames for plotting
         self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
@@ -395,20 +344,43 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         self,
         percentiles: tuple[float, ...] = (5, 10),
         sample_sim: Optional[int] = None,
-    ):
+        *,
+        title_size: int = 22,
+        legend_size: int = 16,
+        tick_size: int = 16,
+    ) -> None:
         """
-        Plot stochastic results with mean + percentile bands, a sample path,
-        and retirement line.
+        Plot stochastic results with mean paths, percentile bands, sample paths,
+        and survival probabilities.
+
+        The figure contains four subplots:
+            1. Optimal consumption over time
+            2. Wealth over time
+            3. Monthly investment / withdrawal
+            4. Cumulative survival probability
 
         Parameters
         ----------
-        percentiles : tuple of float, default=(5, 10)
-            Percentile levels (e.g. 5 -> 5–95%, 10 -> 10–90%)
-        sample_sim : int, optional
-            Simulation index to plot as a sample path.
-            If None, a random simulation is chosen.
-        """
+        percentiles : tuple[float, ...], default=(5, 10)
+            Percentile levels (e.g. 5 → 5–95%, 10 → 10–90%).
 
+        sample_sim : int, optional
+            Index of simulation to plot as a sample path.
+            If None, a random simulation is selected.
+
+        title_size : int, default=18
+            Font size for subplot titles.
+
+        legend_size : int, default=14
+            Font size for legend text.
+
+        tick_size : int, default=14
+            Font size for axis tick labels.
+
+        Returns
+        -------
+        None
+        """
         if self.opt_wealth.empty:
             raise RuntimeError("No solution available — call solve() first.")
 
@@ -421,9 +393,11 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         months = self.months
 
         # ============================
-        # Helper: mean + bands
+        # Helper: mean + percentile bands
         # ============================
-        def mean_and_bands(df: pd.DataFrame):
+        def mean_and_bands(
+            df: pd.DataFrame,
+        ) -> tuple[pd.Series, dict[float, tuple[pd.Series, pd.Series]]]:
             mean = df.mean(axis=1)
             bands = {
                 p: (
@@ -435,7 +409,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             return mean, bands
 
         # ============================
-        # Data prep
+        # Data preparation
         # ============================
         cons_mean, cons_bands = mean_and_bands(self.opt_consumption)
         wealth_mean, wealth_bands = mean_and_bands(self.opt_wealth)
@@ -454,17 +428,31 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # ============================
         fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=False)
 
-        def plot_with_bands(ax, x, mean, bands, color, title, yfmt=False):
+        def plot_with_bands(
+            ax: plt.Axes,
+            x: pd.Index | np.ndarray,
+            mean: pd.Series,
+            bands: dict[float, tuple[pd.Series, pd.Series]],
+            color: str,
+            title: str,
+            yfmt: bool = False,
+        ) -> None:
             all_values = [mean]
 
             for i, (p, (lo, hi)) in enumerate(bands.items()):
-                ax.fill_between(x, lo, hi, color=color, alpha=0.15 + 0.15 * i, label=f"{p}–{100 - p}%")
+                ax.fill_between(
+                    x,
+                    lo,
+                    hi,
+                    color=color,
+                    alpha=0.15 + 0.15 * i,
+                    label=f"{p}–{100 - p}%",
+                )
                 all_values.extend([lo, hi])
 
-            ax.plot(x, mean, color=color, lw=2, label="Mean")
+            ax.plot(x, mean, color=color, lw=2, label="Mean", linestyle="--")
 
-            # Only plot retirement line if retirement_date is within x range
-            if self.retirement_date >= x[0] and self.retirement_date <= x[-1]:
+            if x[0] <= self.retirement_date <= x[-1]:
                 ax.axvline(
                     self.retirement_date,
                     color="red",
@@ -473,18 +461,30 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                     label="Retirement",
                 )
 
-            # Compute dynamic y-limits
+            # Dynamic y-limits
             all_values = np.concatenate([np.ravel(v) for v in all_values])
-            ymin = 0.9 * np.min(all_values)
-            ymax = 1.1 * np.max(all_values)
+            ymin, ymax = np.min(all_values), np.max(all_values)
+
+            # Adjust lower limit
+            if ymin >= 0:
+                ymin *= 0.9
+            else:
+                ymin *= 1.1  # expand downward for negative min
+
+            # Adjust upper limit
+            if ymax >= 0:
+                ymax *= 1.1
+            else:
+                ymax *= 0.9  # expand upward for negative max
+
             ax.set_ylim(ymin, ymax)
 
-            ax.set_title(title)
-            ax.legend()
+            ax.set_title(title, fontsize=title_size)
+            ax.legend(fontsize=legend_size)
             ax.grid(alpha=0.3)
+            ax.tick_params(axis="both", labelsize=tick_size)
 
             if yfmt:
-                from matplotlib.ticker import FuncFormatter
                 ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
 
         # --- 1. Consumption ---
@@ -513,8 +513,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             lw=1.0,
             label="Deterministic Cashflows",
         )
-        axes[0].legend()
-        axes[0].tick_params(axis='both', labelsize=14)
+        axes[0].legend(fontsize=legend_size)
+        axes[0].tick_params(axis="both", labelsize=tick_size)
 
         # --- 2. Wealth ---
         plot_with_bands(
@@ -534,8 +534,18 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             alpha=0.8,
             label="Sample Path",
         )
-        axes[1].legend()
-        axes[1].tick_params(axis='both', labelsize=14)
+
+        if self.dynamic_wealth_grid:
+            axes[1].plot(
+                months,
+                self.opt_wealth_det,
+                color="tab:cyan",
+                lw=1.5,
+                label="Optimal Wealth (det.)",
+            )
+
+        axes[1].legend(fontsize=legend_size)
+        axes[1].tick_params(axis="both", labelsize=tick_size)
 
         # --- 3. Investment / Withdrawal ---
         inv_df = det_cf.values[:, None] - self.opt_consumption.values
@@ -553,7 +563,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             title="Monthly Investment / Withdrawal in Portfolio",
             yfmt=True,
         )
-
         axes[2].plot(
             inv_sample.index,
             inv_sample.values,
@@ -562,20 +571,19 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             alpha=0.8,
             label="Sample Path",
         )
-
         axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
-        axes[2].legend()
-        axes[2].tick_params(axis='both', labelsize=14)
+        axes[2].legend(fontsize=legend_size)
+        axes[2].tick_params(axis="both", labelsize=tick_size)
 
-        # 4. Cumulative survival probability
+        # --- 4. Survival probability ---
         cumulative_survival = np.cumprod(self.survival_probs)
 
         axes[3].plot(self.age_grid, cumulative_survival, color="tab:orange", lw=2)
-        axes[3].set_title("Survival Probability")
-        axes[3].set_xlabel("Age")
+        axes[3].set_title("Survival Probability", fontsize=title_size)
+        axes[3].set_ylim(0.0, 1.05)
         axes[3].grid(True)
-        axes[3].set_ylim(0, 1.05)
-        axes[3].tick_params(axis='both', labelsize=14)
+        axes[3].yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
+        axes[3].tick_params(axis="both", labelsize=tick_size)
 
         plt.tight_layout()
         plt.show()

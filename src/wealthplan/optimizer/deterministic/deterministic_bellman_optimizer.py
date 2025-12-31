@@ -1,15 +1,16 @@
 import logging
 import datetime as dt
-from typing import Dict, Tuple, List, Optional
+from typing import List
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-from matplotlib.ticker import FuncFormatter
+from numba import prange, njit
+
 from tqdm import tqdm
 
 from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.cashflows.base import Cashflow
-from wealthplan.cashflows.salary import Salary
+
 from wealthplan.optimizer.bellman_optimizer import (
     BellmanOptimizer,
 )
@@ -20,9 +21,35 @@ from wealthplan.optimizer.math_tools.penality_functions import (
 from wealthplan.optimizer.math_tools.utility_functions import (
     UtilityFunction,
     crra_utility,
+    crra_utility_numba,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@njit(parallel=True)
+def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
+    n_w = wealth_grid.shape[0]
+
+    v_opt = np.zeros(n_w, dtype=np.float32)
+    consumption_opt = np.zeros(n_w, dtype=np.float32)
+
+    for i in prange(n_w):
+        W = wealth_grid[i]
+
+        c_cands = np.arange(0.0, W + cf_t + 10e-5, c_step, dtype=np.float32)
+
+        W_next = (W + cf_t - c_cands) * (1.0 + r)
+        V_next = np.interp(W_next, wealth_grid, v_t_next)
+
+        instant_util_arr = crra_utility_numba(c_cands)
+        total_val_arr = instant_util_arr + beta * V_next
+
+        idx_max = np.argmax(total_val_arr)
+        v_opt[i] = total_val_arr[idx_max]
+        consumption_opt[i] = c_cands[idx_max]
+
+    return v_opt, consumption_opt
 
 
 class DeterministicBellmanOptimizer(BellmanOptimizer):
@@ -41,7 +68,6 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         cashflows: List[Cashflow],
         instant_utility: UtilityFunction = crra_utility,
         terminal_penalty: PenalityFunction = square_penality,
-        beta: float = 1.0,
         w_max: float = 750_000.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
@@ -62,7 +88,6 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             cashflows=cashflows,
             instant_utility=instant_utility,
             terminal_penalty=terminal_penalty,
-            beta=beta,
             w_max=w_max,
             w_step=w_step,
             c_step=c_step,
@@ -74,12 +99,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         Compute value function and policy by backward induction on discrete grids.
         Results are stored in self.value_function and self.policy keyed by date.
         """
-        n_w = len(self.wealth_grid)
-        # initialize terminal value
         v_t_next = np.array([self.terminal_penalty(w) for w in self.wealth_grid])
-
-        beta = self.beta
-        c_step = self.c_step
 
         # iterate backwards (skip terminal period)
         for t in tqdm(
@@ -105,34 +125,14 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
                 v_t_next = v_t
                 continue
 
-            # candidate consumptions
-            available = self.wealth_grid + cf_t  # shape (n_w,)
-            n_c = int(np.ceil(np.max(available) / c_step)) + 1
-            c_grid = np.arange(0.0, n_c * c_step, c_step)  # shape (n_c,)
-
-            # next period wealth for each (w, c)
-            w_next = (available[:, None] - c_grid[None, :]) * (
-                1 + self.monthly_return
-            )  # (n_w, n_c)
-
-            # interpolate v_next for each row of w_next
-            # np.interp is 1d so vectorize with comprehension (ok for moderate grid sizes)
-            v_next_interp = np.array(
-                [np.interp(w_next[i], self.wealth_grid, v_t_next) for i in range(n_w)]
+            v_t, policy_t = compute_optimal_policy(
+                self.wealth_grid,
+                self.monthly_return,
+                self.beta,
+                v_t_next,
+                cf_t,
+                self.c_step,
             )
-
-            # instant utility vectorized (use log with numerical floor)
-            instant_util = np.log(np.maximum(c_grid, 1e-8))  # shape (n_c,)
-            values = instant_util[None, :] + beta * v_next_interp  # (n_w, n_c)
-
-            # enforce feasibility (next wealth >= 0)
-            feasible_mask = w_next >= 0
-            feasible_values = np.where(feasible_mask, values, -np.inf)
-
-            # select best consumption index per starting wealth
-            best_idx = np.argmax(feasible_values, axis=1)
-            v_t = values[np.arange(n_w), best_idx]
-            policy_t = c_grid[best_idx]
 
             # Store results
             self.value_function[date_t] = v_t.copy()
@@ -181,30 +181,44 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             current_wealth = (current_wealth + cf_t - c_opt) * (1 + self.monthly_return)
             wealth_path[t] = current_wealth
 
-        # Final index handling (set last month values)
-        if n_months >= 2:
-            # set last month's cashflow (could be zero) and consumption via interpolation
-            final_idx = n_months - 1
-            date_f = self.months[final_idx]
-            cashflow_path[final_idx] = self.monthly_cashflow(date_f)
-            # For last month, if policy available, interpolate, otherwise 0
-            if date_f in self.policy:
-                consumption_path[final_idx] = float(
-                    np.interp(current_wealth, self.wealth_grid, self.policy[date_f])
-                )
-            else:
-                consumption_path[final_idx] = 0.0
-            wealth_path[final_idx] = current_wealth
-
         # Save as pandas Series indexed by months
         self.opt_wealth = pd.Series(wealth_path, index=self.months)
         self.opt_consumption = pd.Series(consumption_path, index=self.months)
         self.monthly_cashflows = pd.Series(cashflow_path, index=self.months)
 
-    def plot(self):
+    def plot(
+        self,
+        *,
+        title_size: int = 20,
+        legend_size: int = 16,
+        tick_size: int = 16,
+    ) -> None:
         """
-        Plot deterministic results: consumption, wealth, and investment/withdrawal,
-        with retirement line and dynamic y-limits.
+        Plot deterministic results for consumption, wealth, and
+        investment/withdrawal over time.
+
+        The figure contains three subplots:
+            1. Optimal consumption over time
+            2. Wealth over time
+            3. Monthly investment / withdrawal
+
+        Each subplot includes a retirement date marker (if within range)
+        and dynamically scaled y-axis limits.
+
+        Parameters
+        ----------
+        title_size : int, default=18
+            Font size for subplot titles.
+
+        legend_size : int, default=14
+            Font size for legend text.
+
+        tick_size : int, default=14
+            Font size for axis tick labels.
+
+        Returns
+        -------
+        None
         """
         if self.opt_wealth.empty:
             raise RuntimeError("No solution available — call solve() first.")
@@ -217,42 +231,101 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             else self.monthly_cashflows
         )
 
-        cons = self.opt_consumption.values
-        wealth = self.opt_wealth.values
-        inv = det_cf.values - cons
+        cons: np.ndarray = self.opt_consumption.values
+        wealth: np.ndarray = self.opt_wealth.values
+        inv: np.ndarray = det_cf.values - cons
 
+        # ============================
+        # Plotting
+        # ============================
         fig, axes = plt.subplots(3, 1, figsize=(14, 16), sharex=False)
 
-        def plot_curve(ax, x, y, color, title, yfmt=False, show_retirement=True):
+        def plot_curve(
+            ax: plt.Axes,
+            x: pd.Index | np.ndarray,
+            y: np.ndarray,
+            color: str,
+            title: str,
+            yfmt: bool = False,
+            show_retirement: bool = True,
+        ) -> None:
             ax.plot(x, y, color=color, lw=2, label=title)
-            # Retirement line if within x range
-            if show_retirement and self.retirement_date >= x[0] and self.retirement_date <= x[-1]:
-                ax.axvline(self.retirement_date, color="red", linestyle="--", lw=2, label="Retirement")
-            # Dynamic y-limits
-            ymin, ymax = 0.9 * np.min(y), 1.1 * np.max(y)
+
+            if show_retirement and x[0] <= self.retirement_date <= x[-1]:
+                ax.axvline(
+                    self.retirement_date,
+                    color="red",
+                    linestyle="--",
+                    lw=2,
+                    label="Retirement",
+                )
+
+            ymin, ymax = np.min(y), np.max(y)
+
+            # Adjust lower limit
+            if ymin >= 0:
+                ymin *= 0.9
+            else:
+                ymin *= 1.1  # expand downward for negative min
+
+            # Adjust upper limit
+            if ymax >= 0:
+                ymax *= 1.1
+            else:
+                ymax *= 0.9  # expand upward for negative max
+
             ax.set_ylim(ymin, ymax)
-            ax.set_title(title)
+
+            ax.set_title(title, fontsize=title_size)
             ax.grid(True)
+            ax.tick_params(axis="both", labelsize=tick_size)
+
             if yfmt:
                 from matplotlib.ticker import FuncFormatter
+
                 ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
 
-        # 1. Consumption
-        plot_curve(axes[0], months, cons, "tab:green", "Optimal Consumption Over Time", yfmt=True)
-        axes[0].plot(det_cf.index, det_cf.values, color="blue", linestyle="--", lw=1.0, label="Deterministic Cashflows")
-        axes[0].legend()
-        axes[0].tick_params(axis='both', labelsize=14)
+        # --- 1. Consumption ---
+        plot_curve(
+            axes[0],
+            months,
+            cons,
+            color="tab:green",
+            title="Optimal Consumption Over Time",
+            yfmt=True,
+        )
+        axes[0].plot(
+            det_cf.index,
+            det_cf.values,
+            color="blue",
+            linestyle="--",
+            lw=1.0,
+            label="Deterministic Cashflows",
+        )
+        axes[0].legend(fontsize=legend_size)
 
-        # 2. Wealth
-        plot_curve(axes[1], months, wealth, "tab:blue", "Wealth Over Time", yfmt=True)
-        axes[1].legend()
-        axes[1].tick_params(axis='both', labelsize=14)
+        # --- 2. Wealth ---
+        plot_curve(
+            axes[1],
+            months,
+            wealth,
+            color="tab:blue",
+            title="Wealth Over Time",
+            yfmt=True,
+        )
+        axes[1].legend(fontsize=legend_size)
 
-        # 3. Investment / Withdrawal
-        plot_curve(axes[2], months, inv, "tab:purple", "Monthly Investment / Withdrawal", yfmt=True)
+        # --- 3. Investment / Withdrawal ---
+        plot_curve(
+            axes[2],
+            months,
+            inv,
+            color="tab:purple",
+            title="Monthly Investment / Withdrawal",
+            yfmt=True,
+        )
         axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
-        axes[2].legend()
-        axes[2].tick_params(axis='both', labelsize=14)
+        axes[2].legend(fontsize=legend_size)
 
         plt.tight_layout()
         plt.show()
