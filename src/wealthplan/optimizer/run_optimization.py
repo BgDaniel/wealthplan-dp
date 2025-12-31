@@ -28,14 +28,14 @@ def main() -> None:
     # Simulation horizon
     # ------------------
     start_date: dt.date = dt.date(2026, 1, 1)
-    end_date: dt.date = dt.date(2031, 1, 1)
+    end_date: dt.date = dt.date(2029, 1, 1)
     retirement_date: dt.date = dt.date(2053, 10, 1)
 
     # ----------
     # Cashflows
     # ----------
     salary: Salary = Salary(
-        monthly_salary=3_800.0,
+        monthly_salary=1_000,
         retirement_date=retirement_date,
     )
 
@@ -54,17 +54,17 @@ def main() -> None:
 
     cashflows: List[Cashflow] = [
         salary,
-        rent,
-        insurance,
-        pension
+        #rent,
+        #insurance,
+        #pension
     ]
 
     # -------
     # Wealth
     # -------
-    initial_wealth: float = 40_000.0
+    initial_wealth: float = 50_000.0
 
-    yearly_return: float = 0.05
+    yearly_return: float = 0.0#0.05
 
     save = False
 
@@ -80,9 +80,9 @@ def main() -> None:
             initial_wealth=initial_wealth,
             yearly_return=yearly_return,
             cashflows=cashflows,
-            w_max=300_000.0,
-            w_step=250.0,
-            c_step=250.0,
+            w_max=100_000.0,
+            w_step=100.0,
+            c_step=100.0,
             save=save
         )
     )
@@ -113,9 +113,9 @@ def main() -> None:
         sigma=sigma,
         survival_model=survival_model,
         current_age=current_age,
-        w_max=300_000.0,
-        w_step=250.0,
-        c_step=250.0,
+        w_max=100_000.0,
+        w_step=100.0,
+        c_step=100.0,
         stochastic=False,
         save=save
     )

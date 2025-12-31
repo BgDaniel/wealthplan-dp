@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @njit(parallel=True)
 def compute_optimal_policy(
-    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, a_grid
+    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, cf_t, c_grid
 ):
     n_w = wealth_grid.shape[0]
 
@@ -42,9 +42,9 @@ def compute_optimal_policy(
     for i in prange(n_w):
         W = wealth_grid[i]
 
-        a_vals = np.minimum(a_grid[0, :], W)  # vectorized
-        W_up_arr = (W - a_vals) * u
-        W_down_arr = (W - a_vals) * d
+        a_vals = np.minimum(c_grid[0, :], W + cf_t)  # vectorized
+        W_up_arr = (W + cf_t - a_vals) * u
+        W_down_arr = (W + cf_t - a_vals) * d
         V_up_arr = np.interp(W_up_arr, wealth_grid, v_t_next_jp1)
         V_down_arr = np.interp(W_down_arr, wealth_grid, v_t_next_j)
         instant_util_arr = crra_utility_numba(a_vals)
@@ -229,6 +229,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             desc="Backward Induction",  # description
         ):
             date_t = self.months[t_idx]
+            cf_t = self.monthly_cashflow(date_t)
             q_t = self.survival_probs[t_idx]
 
             # Check cache
@@ -263,6 +264,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                         np.array(v_t_next[j], dtype=np.float32),  # down node
                         np.array(v_t_next[j + 1], dtype=np.float32),  # up node
                         q_t,
+                        cf_t,
                         c_grid,
                     )
                 )
@@ -416,13 +418,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         if sample_sim is None:
             sample_sim = np.random.randint(self.n_sims)
 
-        # --- Detect retirement date ---
-        retirement_date: Optional[dt.date] = None
-        for cf in getattr(self, "cashflows", []):
-            if hasattr(cf, "retirement_date"):
-                retirement_date = cf.retirement_date
-                break
-
         months = self.months
 
         # ============================
@@ -459,36 +454,38 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # ============================
         fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=False)
 
-        def thousands_formatter(x, pos):
-            return f"{x:,.0f}"
-
         def plot_with_bands(ax, x, mean, bands, color, title, yfmt=False):
-            ax.plot(x, mean, color=color, lw=2, label="Mean")
+            all_values = [mean]
 
             for i, (p, (lo, hi)) in enumerate(bands.items()):
-                ax.fill_between(
-                    x,
-                    lo,
-                    hi,
-                    color=color,
-                    alpha=0.15 + 0.15 * i,
-                    label=f"{p}–{100 - p}%",
-                )
+                ax.fill_between(x, lo, hi, color=color, alpha=0.15 + 0.15 * i, label=f"{p}–{100 - p}%")
+                all_values.extend([lo, hi])
 
-            if retirement_date:
+            ax.plot(x, mean, color=color, lw=2, label="Mean")
+
+            # Only plot retirement line if retirement_date is within x range
+            if self.retirement_date >= x[0] and self.retirement_date <= x[-1]:
                 ax.axvline(
-                    retirement_date,
+                    self.retirement_date,
                     color="red",
                     linestyle="--",
                     lw=2,
                     label="Retirement",
                 )
 
+            # Compute dynamic y-limits
+            all_values = np.concatenate([np.ravel(v) for v in all_values])
+            ymin = 0.9 * np.min(all_values)
+            ymax = 1.1 * np.max(all_values)
+            ax.set_ylim(ymin, ymax)
+
             ax.set_title(title)
             ax.legend()
             ax.grid(alpha=0.3)
+
             if yfmt:
-                ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+                from matplotlib.ticker import FuncFormatter
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
 
         # --- 1. Consumption ---
         plot_with_bands(
@@ -517,7 +514,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             label="Deterministic Cashflows",
         )
         axes[0].legend()
-        axes[0].set_ylim((0.0, 20_000))
+        axes[0].tick_params(axis='both', labelsize=14)
 
         # --- 2. Wealth ---
         plot_with_bands(
@@ -538,6 +535,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             label="Sample Path",
         )
         axes[1].legend()
+        axes[1].tick_params(axis='both', labelsize=14)
 
         # --- 3. Investment / Withdrawal ---
         inv_df = det_cf.values[:, None] - self.opt_consumption.values
@@ -567,7 +565,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
         axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
         axes[2].legend()
-        axes[2].set_ylim(-20_000, 20_000)
+        axes[2].tick_params(axis='both', labelsize=14)
 
         # 4. Cumulative survival probability
         cumulative_survival = np.cumprod(self.survival_probs)
@@ -577,6 +575,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         axes[3].set_xlabel("Age")
         axes[3].grid(True)
         axes[3].set_ylim(0, 1.05)
+        axes[3].tick_params(axis='both', labelsize=14)
 
         plt.tight_layout()
         plt.show()

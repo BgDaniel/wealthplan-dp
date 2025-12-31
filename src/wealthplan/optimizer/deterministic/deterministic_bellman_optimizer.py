@@ -201,68 +201,58 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         self.opt_consumption = pd.Series(consumption_path, index=self.months)
         self.monthly_cashflows = pd.Series(cashflow_path, index=self.months)
 
-    def plot(self) -> None:
-        """Plot the optimized wealth, consumption and cashflows (after solve())."""
+    def plot(self):
+        """
+        Plot deterministic results: consumption, wealth, and investment/withdrawal,
+        with retirement line and dynamic y-limits.
+        """
         if self.opt_wealth.empty:
             raise RuntimeError("No solution available — call solve() first.")
 
-        fig, axs = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        months = self.months
 
-        # Formatter for y-axis: thousand separators
-        def thousands_formatter(x, pos):
-            return f"{x:,.0f}"
+        det_cf = (
+            self.monthly_cashflows.iloc[:, 0]
+            if isinstance(self.monthly_cashflows, pd.DataFrame)
+            else self.monthly_cashflows
+        )
 
-        # --- Wealth plot ---
-        axs[0].plot(
-            self.opt_wealth.index,
-            self.opt_wealth.values,
-            label="Optimized Wealth",
-            color="tab:blue",
-            linewidth=2,
-        )
-        axs[0].axvline(
-            self.retirement_date,
-            color="red",
-            linestyle="--",
-            linewidth=1.5,
-            label="Retirement Date",
-        )
-        axs[0].set_ylabel("Wealth")
-        axs[0].set_title("Optimized Wealth Over Time")
-        axs[0].legend(loc="lower left")
-        axs[0].grid(True, alpha=0.3)
-        axs[0].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+        cons = self.opt_consumption.values
+        wealth = self.opt_wealth.values
+        inv = det_cf.values - cons
 
-        # --- Consumption + Cashflows plot ---
-        axs[1].plot(
-            self.opt_consumption.index,
-            self.opt_consumption.values,
-            label="Optimized Consumption",
-            color="tab:green",
-            linewidth=2,
-        )
-        axs[1].plot(
-            self.monthly_cashflows.index,
-            self.monthly_cashflows.values,
-            label="Monthly Cashflows",
-            color="tab:orange",
-            linewidth=2,
-            linestyle="--",
-            alpha=0.8,
-        )
-        axs[1].axvline(
-            self.retirement_date,
-            color="red",
-            linestyle="--",
-            linewidth=1.5,
-            label="Retirement Date",
-        )
-        axs[1].set_ylabel("Consumption / Cashflows")
-        axs[1].set_title("Consumption and Cashflows Over Time")
-        axs[1].legend(loc="lower left")
-        axs[1].grid(True, alpha=0.3)
-        axs[1].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+        fig, axes = plt.subplots(3, 1, figsize=(14, 16), sharex=False)
 
-        plt.xlabel("Date")
+        def plot_curve(ax, x, y, color, title, yfmt=False, show_retirement=True):
+            ax.plot(x, y, color=color, lw=2, label=title)
+            # Retirement line if within x range
+            if show_retirement and self.retirement_date >= x[0] and self.retirement_date <= x[-1]:
+                ax.axvline(self.retirement_date, color="red", linestyle="--", lw=2, label="Retirement")
+            # Dynamic y-limits
+            ymin, ymax = 0.9 * np.min(y), 1.1 * np.max(y)
+            ax.set_ylim(ymin, ymax)
+            ax.set_title(title)
+            ax.grid(True)
+            if yfmt:
+                from matplotlib.ticker import FuncFormatter
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+
+        # 1. Consumption
+        plot_curve(axes[0], months, cons, "tab:green", "Optimal Consumption Over Time", yfmt=True)
+        axes[0].plot(det_cf.index, det_cf.values, color="blue", linestyle="--", lw=1.0, label="Deterministic Cashflows")
+        axes[0].legend()
+        axes[0].tick_params(axis='both', labelsize=14)
+
+        # 2. Wealth
+        plot_curve(axes[1], months, wealth, "tab:blue", "Wealth Over Time", yfmt=True)
+        axes[1].legend()
+        axes[1].tick_params(axis='both', labelsize=14)
+
+        # 3. Investment / Withdrawal
+        plot_curve(axes[2], months, inv, "tab:purple", "Monthly Investment / Withdrawal", yfmt=True)
+        axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
+        axes[2].legend()
+        axes[2].tick_params(axis='both', labelsize=14)
+
         plt.tight_layout()
         plt.show()
