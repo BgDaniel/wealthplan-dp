@@ -28,7 +28,7 @@ def main() -> None:
     # Simulation horizon
     # ------------------
     start_date: dt.date = dt.date(2026, 1, 1)
-    end_date: dt.date = dt.date(2041, 1, 1)
+    end_date: dt.date = dt.date(2031, 1, 1)
     retirement_date: dt.date = dt.date(2053, 10, 1)
 
     # ----------
@@ -56,7 +56,7 @@ def main() -> None:
         salary,
         rent,
         insurance,
-        pension,
+        pension
     ]
 
     # -------
@@ -65,6 +65,8 @@ def main() -> None:
     initial_wealth: float = 40_000.0
 
     yearly_return: float = 0.05
+
+    save = False
 
     # ----------------------------
     # Deterministic Bellman solver
@@ -81,6 +83,7 @@ def main() -> None:
             w_max=300_000.0,
             w_step=250.0,
             c_step=250.0,
+            save=save
         )
     )
 
@@ -90,12 +93,11 @@ def main() -> None:
     # --------------------------------
     # Stochastic Binomial Tree solver
     # --------------------------------
-    r: float = 0.05
     sigma: float = 0.10
 
     survival_model: SurvivalModel = SurvivalModel(
         b=9.5e-5,
-        c=0.085,
+        c=0.000085#0.085,
     )
 
     current_age: int = 37
@@ -114,9 +116,12 @@ def main() -> None:
         w_max=300_000.0,
         w_step=250.0,
         c_step=250.0,
+        stochastic=False,
+        save=save
     )
 
     bin_tree_optimizer.solve()
+    bin_tree_optimizer.plot()
 
 
 if __name__ == "__main__":

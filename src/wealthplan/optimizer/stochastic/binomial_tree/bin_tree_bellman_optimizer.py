@@ -235,7 +235,10 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             if self.cache.has(date_t):
                 logger.info("Cache hit for %s", date_t)
 
-                v_t, policy_t = self.cache.load_date(date_t)
+                cached_data = self.cache.load_date(date_t)
+
+                v_t = cached_data[VALUE_FUNCTION_KEY]
+                policy_t = cached_data[POLICY_KEY]
 
                 self.value_function[date_t] = v_t
                 self.policy[date_t] = policy_t
@@ -280,7 +283,9 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             # Prepare for next iteration
             v_t_next = v_t
 
-    def _roll_single_path(self, policy_list, cashflow_list, updown_path: np.ndarray):
+    def _roll_single_path(
+        self, cashflow_list, updown_path: np.ndarray, survival_path: np.ndarray
+    ):
         """
         Roll out a single path along the binomial tree given a fixed sequence of up/down jumps.
 
@@ -304,20 +309,31 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         cashflow_path = np.zeros(self.n_months, dtype=np.float32)
 
         # initial month
-        wealth_path[0] = self.wealth_0
+        wealth_path[0] = self.initial_wealth
         cashflow_path[0] = cashflow_list[0]
 
         # node index at time t=0 is always 0
         node_idx = 0
-        cons = np.interp(wealth_path[0], self.wealth_grid, policy_list[0][node_idx, :])
+        cons = np.interp(
+            wealth_path[0], self.wealth_grid, self.policy[self.months[0]][node_idx, :]
+        )
         consumption_path[0] = cons
 
         # forward roll
         for t in range(1, self.n_months - 1):
+            month = self.months[t]
+
+            if survival_path[t] == 0:
+                # Person is dead: zero everything
+                wealth_path[t] = 0.0
+                consumption_path[t] = 0.0
+                cashflow_path[t] = 0.0
+                continue
+
             W_prev = wealth_path[t - 1]
 
             node_idx = updown_path[:t].sum()
-            cons = np.interp(W_prev, self.wealth_grid, policy_list[t][node_idx, :])
+            cons = np.interp(W_prev, self.wealth_grid, self.policy[month][node_idx, :])
             consumption_path[t] = cons
             cashflow_path[t] = cashflow_list[t]
 
@@ -342,16 +358,17 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         rng = np.random.default_rng(self.seed)
 
         # prepare policies and cashflows per month
-        policy_list = []
         cashflow_list = []
 
-        for t_idx, date_t in enumerate(self.months[:-1]):
-            _, policy_t = self.cache.load_date(date_t)
-            policy_list.append(policy_t)
+        for date_t in self.months[:-1]:
             cashflow_list.append(self.monthly_cashflow(date_t))
 
         # generate random up/down paths
         updown_paths = rng.integers(0, 2, size=(self.n_sims, self.n_months - 1))
+
+        survival_simulations = self.survival_model.simulate_survival(
+            self.age_grid, self.dt, self.n_sims
+        )
 
         # initialize storage
         wealth_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
@@ -361,7 +378,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # simulate each path
         for sim in range(self.n_sims):
             W_path, C_path, CF_path = self._roll_single_path(
-                policy_list, cashflow_list, updown_paths[sim]
+                cashflow_list, updown_paths[sim], survival_simulations[:, sim]
             )
             wealth_paths[:, sim] = W_path
             consumption_paths[:, sim] = C_path
@@ -554,9 +571,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
         # 4. Cumulative survival probability
         cumulative_survival = np.cumprod(self.survival_probs)
-        age_grid = self.current_age + self.time_grid
 
-        axes[3].plot(age_grid, cumulative_survival, color="tab:orange", lw=2)
+        axes[3].plot(self.age_grid, cumulative_survival, color="tab:orange", lw=2)
         axes[3].set_title("Survival Probability")
         axes[3].set_xlabel("Age")
         axes[3].grid(True)

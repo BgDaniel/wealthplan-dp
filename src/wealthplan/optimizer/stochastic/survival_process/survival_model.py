@@ -79,6 +79,31 @@ class SurvivalModel:
         """
         return self.b * np.exp(self.c * age_t)
 
+    def simulate_survival(self, age_t: np.ndarray, dt: float, n_sims: int) -> np.ndarray:
+        """
+        Sequentially simulate survival paths using conditional survival probabilities.
+
+        Args:
+            age_t: Array of ages
+            dt: Time step (e.g., 1/12 for monthly)
+            n_sims: Number of simulated individuals
+
+        Returns:
+            Array of shape (n_months, n_sims) with 1.0 = alive, 0.0 = dead
+        """
+        n_months = len(age_t)
+        survival_paths = np.ones((n_months, n_sims), dtype=float)
+
+        # Conditional survival probabilities per month
+        q_t = self.conditional_survival_probabilities(age_t, dt)
+
+        for t in range(1, n_months):
+            alive_prev = survival_paths[t - 1, :]  # previous month alive
+            random_draws = np.random.rand(n_sims)
+            survival_paths[t, :] = alive_prev * (random_draws <= q_t[t - 1])
+
+        return survival_paths
+
 
 if __name__ == "__main__":
     # Gompertz parameters
@@ -100,14 +125,22 @@ if __name__ == "__main__":
     # Instantaneous hazard
     h_rate = model.hazard_rate(ages)
 
+    # Simulate multiple survival paths
+    n_sims = 1000
+    survival_simulations = model.simulate_survival(ages, dt_month, n_sims)
+
+    # Mean survival across simulations (empirical survival probability)
+    mean_simulated_survival = survival_simulations.mean(axis=1)
+
     # Plot
     plt.figure(figsize=(12, 6))
-    plt.plot(ages, q_t, label="Conditional monthly survival q_t")
-    plt.plot(ages, S_t, label="Cumulative survival S_t")
-    plt.plot(ages, h_rate, label="Instantaneous hazard h(a)")
+    plt.plot(ages, q_t, label="Conditional monthly survival q_t", linestyle='--')
+    plt.plot(ages, S_t, label="Cumulative survival S_t", linestyle='-')
+    plt.plot(ages, h_rate, label="Instantaneous hazard h(a)", linestyle=':')
+    plt.plot(ages, mean_simulated_survival, label="Mean simulated survival", linewidth=2)
     plt.xlabel("Age")
     plt.ylabel("Probability / Hazard")
-    plt.title("Gompertz Mortality")
+    plt.title("Gompertz Mortality: Survival and Hazard")
     plt.legend()
     plt.grid(True)
     plt.show()
