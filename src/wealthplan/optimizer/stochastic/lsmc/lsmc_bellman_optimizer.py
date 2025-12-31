@@ -514,7 +514,7 @@ class LSMCBellmanOptimizer:
         # ============================
         # Plotting
         # ============================
-        fig, axes = plt.subplots(3, 1, figsize=(18, 20), sharex=False)
+        fig, axes = plt.subplots(4, 1, figsize=(18, 20), sharex=False)
 
         def thousands_formatter(x, pos):
             return f"{x:,.0f}"
@@ -589,14 +589,46 @@ class LSMCBellmanOptimizer:
         )
         axes[1].legend()
 
-        # --- 3. Survival (mean only) ---
-        axes[2].plot(months, surv_mean, color="tab:purple", lw=2)
+        # --- 3. Investment / Withdrawal in / from Portfolio ---
+        inv_df = det_cf.values[:, None] - self.opt_consumption.values
+        inv_df = pd.DataFrame(inv_df, index=self.opt_consumption.index)
+
+        inv_mean, inv_bands = mean_and_bands(inv_df)
+        inv_sample = inv_df.iloc[:, sample_sim]
+
+        plot_with_bands(
+            axes[2],
+            months,
+            inv_mean,
+            inv_bands,
+            color="tab:purple",
+            title="Monthly Investment / Withdrawal in Portfolio",
+            yfmt=True,
+        )
+
+        axes[2].plot(
+            inv_sample.index,
+            inv_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
+        )
+
         if retirement_date:
             axes[2].axvline(retirement_date, color="red", linestyle="--")
-        axes[2].set_title("Survival Probability Over Time")
+
+        axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
         axes[2].legend()
-        axes[2].grid(alpha=0.3)
-        axes[2].set_xlabel("Date")
+
+        # --- 4. Survival (mean only) ---
+        axes[3].plot(months, surv_mean, color="tab:purple", lw=2)
+        if retirement_date:
+            axes[3].axvline(retirement_date, color="red", linestyle="--")
+        axes[3].set_title("Survival Probability Over Time")
+        axes[3].legend()
+        axes[3].grid(alpha=0.3)
+        axes[3].set_xlabel("Date")
 
         plt.tight_layout()
         plt.show()

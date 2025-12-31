@@ -12,7 +12,6 @@ Endpoints:
 """
 
 import datetime as dt
-import logging
 from typing import List
 
 from fastapi import FastAPI, HTTPException
@@ -30,7 +29,7 @@ from src.wealthplan.cashflows.rent import Rent
 from src.wealthplan.cashflows.pension import Pension
 from src.wealthplan.cashflows.life_insurance import LifeInsurance
 from src.wealthplan.wealth import Wealth
-from src.wealthplan.optimizer.deterministic.bellman.bellman_optimizer import (
+from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     BellmanOptimizer,
 )
 

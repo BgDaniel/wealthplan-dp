@@ -2,36 +2,32 @@ import logging
 import datetime as dt
 import math
 from numba import njit, prange
-from typing import Dict, Optional, List, Callable
+from typing import Optional, List
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from joblib import Parallel, delayed
 from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
 
-
+from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.cashflows.base import Cashflow
 
-from wealthplan.optimizer.stochastic.bellmann.binomial_tree.result_cache import (
-    ResultCache,
+
+from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer
+from wealthplan.optimizer.math_tools.penality_functions import (
+    PenalityFunction,
+    square_penality,
+)
+from wealthplan.optimizer.math_tools.utility_functions import (
+    UtilityFunction,
+    crra_utility,
+    crra_utility_numba,
+)
+from wealthplan.optimizer.stochastic.survival_process.survival_model import (
+    SurvivalModel,
 )
 
-
 logger = logging.getLogger(__name__)
-
-
-@njit
-def crra_utility_numba(c, gamma=0.5, epsilon=1e-8):
-    n = c.shape[0]
-    u = np.empty(n, dtype=np.float32)
-    for i in range(n):
-        ci = max(c[i], 0.0) + epsilon
-        if gamma == 1.0:
-            u[i] = np.log(ci)
-        else:
-            u[i] = (ci ** (1.0 - gamma)) / (1.0 - gamma)
-    return u
 
 
 @njit(parallel=True)
@@ -63,113 +59,100 @@ def compute_optimal_policy(
     return v_opt, consumption_opt
 
 
-class BinTreeBellmanOptimizer:
+class BinTreeBellmanOptimizer(BellmanOptimizer):
+    """
+    Binomial tree-based Bellman optimizer.
+    """
+
     def __init__(
         self,
         run_id: str,
         start_date: dt.date,
         end_date: dt.date,
-        current_age: int,
-        wealth_0: float,
+        retirement_date: dt.date,
+        initial_wealth: float,
+        yearly_return: float,
         cashflows: List[Cashflow],
         sigma: float,
-        r: float,
-        b: float,
-        c: float,
-        terminal_penalty: Callable[[np.ndarray], np.ndarray],
-        max_wealth: float = 500000.0,
-        a_steps: int = 1000,
-        delta: float = 500.0,
+        survival_model: SurvivalModel,
+        current_age: int,
+        instant_utility: UtilityFunction = crra_utility,
+        terminal_penalty: PenalityFunction = square_penality,
         beta: float = 1.0,
+        w_max: float = 750_000.0,
+        w_step: float = 500.0,
+        c_step: float = 500.0,
+        n_sims: int = 2500,
+        seed: int = 42,
         save: bool = True,
-        parallelize: bool = False,
+        stochastic: bool = True,
     ) -> None:
         """
-        Initialize the stochastic Bellman optimizer.
-
-        Parameters
-        ----------
-        gbm_returns : object
-            Stochastic returns simulator
-        survival_process : object
-            Survival / mortality process
-        *args, **kwargs : forwarded to BaseConsumptionOptimizer
+        Initialize the binomial tree Bellman optimizer.
         """
-        self.start_date: dt.date = start_date
-        self.end_date: dt.date = end_date
-
-        self.current_age = current_age
-
-        self.wealth_0 = wealth_0
-        self.cashflows: List[Cashflow] = cashflows
+        # ---- Call base constructor ----
+        super().__init__(
+            run_id=run_id,
+            start_date=start_date,
+            end_date=end_date,
+            retirement_date=retirement_date,
+            initial_wealth=initial_wealth,
+            yearly_return=yearly_return,
+            cashflows=cashflows,
+            instant_utility=instant_utility,
+            terminal_penalty=terminal_penalty,
+            beta=beta,
+            w_max=w_max,
+            w_step=w_step,
+            c_step=c_step,
+            save=save,
+        )
 
         self.sigma = sigma
-        self.r = r
-        self.b = b
-        self.c = c
 
-        self.terminal_penalty = terminal_penalty
+        self.survival_model = survival_model
+        self.current_age = current_age
 
-        self.max_wealth = max_wealth
-        self.a_steps = a_steps
-
-        self.delta = delta
-
-        self.beta: float = beta
-
-        self.months = [
-            d.date()
-            for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
-        ]
-        self.n_months = len(self.months)
-
-        self.wealth_grid = np.arange(0.0, self.max_wealth, self.delta, dtype=np.float32)
-        self.n_steps = len(self.wealth_grid)
-
-        self.save = save
-
-        self.parallelize = parallelize
-
-        self.run_id = run_id
-
-        self.cache = ResultCache(enabled=save, run_id=run_id)
-
-        self.save: bool = save
-
-        self.dt = 1.0 / 12.0
-        self.sqrt_dt = math.sqrt(self.dt)
-
-        self.u = math.exp(self.sigma * self.sqrt_dt)
-        self.d = 1.0 / self.u
-
-        self.p = (math.exp(self.r * self.dt) - self.d) / (self.u - self.d)
-        self.q = 1.0 - self.p
-
-        self.time_grid = np.array(
-            [(m - self.months[0]).days / 365.0 for m in self.months],
-            dtype=np.float64,
+        self.age_grid = (
+            np.array(
+                [(m - self.months[0]).days / 365.0 for m in self.months],
+                dtype=np.float64,
+            )
+            + self.current_age
         )
 
-        age_t = self.current_age + self.time_grid
-
-        # Integrated hazard over [t, t+dt]
-        hazard_integral = (self.b / self.c) * (
-            np.exp(self.c * (age_t + self.dt)) - np.exp(self.c * age_t)
+        # Compute conditional survival probabilities over one time step
+        self.survival_probs = survival_model.conditional_survival_probabilities(
+            self.age_grid, self.dt
         )
 
-        # Conditional survival probabilities q_t
-        self.survival_probs = np.exp(-hazard_integral)
+        self.n_sims = n_sims
+        self.seed = seed
 
-        # outputs (to be populated by solve())
-        self.value_function: Dict[dt.date, np.ndarray] = {}
-        self.policy: Dict[dt.date, np.ndarray] = {}
-        self.opt_wealth: pd.DataFrame = pd.DataFrame(dtype=float)
-        self.opt_consumption: pd.DataFrame = pd.DataFrame(dtype=float)
-        self.monthly_cashflows: pd.DataFrame = pd.DataFrame(dtype=float)
+        self.stochastic = stochastic
 
-    def monthly_cashflow(self, date: dt.date) -> float:
-        """Sum deterministic cashflows for the given month."""
-        return sum(cf.cashflow(date) for cf in self.cashflows)
+        # Compute binomial parameters
+        self._compute_binomial_params()
+
+    def _compute_binomial_params(self) -> None:
+        """
+        Compute the binomial tree parameters u (up), d (down), and p (up probability)
+        based on the risk-free rate, volatility, and time step.
+        """
+        self.sqrt_dt: float = math.sqrt(self.dt)
+
+        if self.stochastic:
+            self.u: float = math.exp(self.sigma * self.sqrt_dt)
+            self.d: float = 1.0 / self.u
+
+            self.p: float = (1.0 + self.monthly_return - self.d) / (self.u - self.d)
+            self.q: float = 1.0 - self.p
+        else:
+            self.u: float = 1.0
+            self.d: float = 1.0
+
+            self.p: float = 0.5
+            self.q: float = 0.5
 
     def _compute_optimal_policy(
         self, j: int, v_t_next: list, q_t: float, a_grid: np.ndarray
@@ -233,7 +216,7 @@ class BinTreeBellmanOptimizer:
         v_t_next = np.array([v_terminal.copy() for _ in range(n_t)])
 
         # Consumption grid
-        a_grid = np.linspace(0, self.max_wealth, self.a_steps, dtype=np.float32)[
+        c_grid = np.arange(0, self.w_max, self.c_step, dtype=np.float32)[
             np.newaxis, :
         ]  # shape (1, n_a)
 
@@ -266,27 +249,20 @@ class BinTreeBellmanOptimizer:
 
             results = []
 
-            if self.parallelize:
-                # Parallel computation over stock nodes
-                results = Parallel(n_jobs=-1)(
-                    delayed(self._compute_optimal_policy)(j, v_t_next, q_t, a_grid)
-                    for j in range(n_s)
-                )
-            else:
-                for j in range(n_s):
-                    results.append(
-                        compute_optimal_policy(
-                            self.wealth_grid,
-                            self.u,
-                            self.d,
-                            self.p,
-                            self.beta,
-                            np.array(v_t_next[j], dtype=np.float32),  # down node
-                            np.array(v_t_next[j + 1], dtype=np.float32),  # up node
-                            q_t,
-                            a_grid,
-                        )
+            for j in range(n_s):
+                results.append(
+                    compute_optimal_policy(
+                        self.wealth_grid,
+                        self.u,
+                        self.d,
+                        self.p,
+                        self.beta,
+                        np.array(v_t_next[j], dtype=np.float32),  # down node
+                        np.array(v_t_next[j + 1], dtype=np.float32),  # up node
+                        q_t,
+                        c_grid,
                     )
+                )
 
             # Collect results
             for j, (v_opt, comsumption_opt) in enumerate(results):
@@ -297,7 +273,9 @@ class BinTreeBellmanOptimizer:
             self.value_function[date_t] = v_t.copy()
             self.policy[date_t] = policy_t.copy()
 
-            self.cache.store_date(date_t=date_t, value_function=v_t, policy=policy_t)
+            self.cache.store_date(
+                date_t=date_t, data={VALUE_FUNCTION_KEY: v_t, POLICY_KEY: policy_t}
+            )
 
             # Prepare for next iteration
             v_t_next = v_t
@@ -350,7 +328,7 @@ class BinTreeBellmanOptimizer:
 
         return wealth_path, consumption_path, cashflow_path
 
-    def _roll_forward(self, n_sims: int = 1000, seed: int = 42):
+    def _roll_forward(self):
         """
         Roll out multiple Monte Carlo sample paths along the binomial tree.
 
@@ -361,9 +339,7 @@ class BinTreeBellmanOptimizer:
         seed : int
             Random seed for reproducibility.
         """
-        self.n_sims = n_sims
-
-        rng = np.random.default_rng(seed)
+        rng = np.random.default_rng(self.seed)
 
         # prepare policies and cashflows per month
         policy_list = []
@@ -375,15 +351,15 @@ class BinTreeBellmanOptimizer:
             cashflow_list.append(self.monthly_cashflow(date_t))
 
         # generate random up/down paths
-        updown_paths = rng.integers(0, 2, size=(n_sims, self.n_months - 1))
+        updown_paths = rng.integers(0, 2, size=(self.n_sims, self.n_months - 1))
 
         # initialize storage
-        wealth_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
-        consumption_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
-        cashflow_paths = np.zeros((self.n_months, n_sims), dtype=np.float32)
+        wealth_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
+        consumption_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
+        cashflow_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
 
         # simulate each path
-        for sim in range(n_sims):
+        for sim in range(self.n_sims):
             W_path, C_path, CF_path = self._roll_single_path(
                 policy_list, cashflow_list, updown_paths[sim]
             )
@@ -395,19 +371,6 @@ class BinTreeBellmanOptimizer:
         self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
         self.opt_consumption = pd.DataFrame(consumption_paths, index=self.months)
         self.monthly_cashflows = pd.DataFrame(cashflow_paths, index=self.months)
-
-    def solve(self, n_sims: int = 1000, seed: int = 42) -> None:
-        """Solve with backward induction (or load cache if available), then roll forward.
-        Returns (value_function, policy).
-        """
-        logger.info("BellmanOptimizer.solve() started.")
-
-        self._backward_induction()
-
-        logger.info("Rolling forward to get paths.")
-        self._roll_forward(n_sims=n_sims, seed=seed)
-
-        logger.info("BellmanOptimizer.solve() finished.")
 
     def plot(
         self,
@@ -477,7 +440,7 @@ class BinTreeBellmanOptimizer:
         # ============================
         # Plotting
         # ============================
-        fig, axes = plt.subplots(3, 1, figsize=(14, 16), sharex=False)
+        fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=False)
 
         def thousands_formatter(x, pos):
             return f"{x:,.0f}"
@@ -502,13 +465,6 @@ class BinTreeBellmanOptimizer:
                     linestyle="--",
                     lw=2,
                     label="Retirement",
-                )
-                ax.text(
-                    retirement_date,
-                    ax.get_ylim()[1] * 0.9,
-                    "Retirement",
-                    color="red",
-                    rotation=90,
                 )
 
             ax.set_title(title)
@@ -566,15 +522,45 @@ class BinTreeBellmanOptimizer:
         )
         axes[1].legend()
 
+        # --- 3. Investment / Withdrawal ---
+        inv_df = det_cf.values[:, None] - self.opt_consumption.values
+        inv_df = pd.DataFrame(inv_df, index=self.opt_consumption.index)
+
+        inv_mean, inv_bands = mean_and_bands(inv_df)
+        inv_sample = inv_df.iloc[:, sample_sim]
+
+        plot_with_bands(
+            axes[2],
+            months,
+            inv_mean,
+            inv_bands,
+            color="tab:purple",
+            title="Monthly Investment / Withdrawal in Portfolio",
+            yfmt=True,
+        )
+
+        axes[2].plot(
+            inv_sample.index,
+            inv_sample.values,
+            color="red",
+            lw=1.0,
+            alpha=0.8,
+            label="Sample Path",
+        )
+
+        axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
+        axes[2].legend()
+        axes[2].set_ylim(-20_000, 20_000)
+
         # 4. Cumulative survival probability
         cumulative_survival = np.cumprod(self.survival_probs)
         age_grid = self.current_age + self.time_grid
 
-        axes[2].plot(age_grid, cumulative_survival, color="tab:orange", lw=2)
-        axes[2].set_title("Survival Probability")
-        axes[2].set_xlabel("Age")
-        axes[2].grid(True)
-        axes[2].set_ylim(0, 1.05)
+        axes[3].plot(age_grid, cumulative_survival, color="tab:orange", lw=2)
+        axes[3].set_title("Survival Probability")
+        axes[3].set_xlabel("Age")
+        axes[3].grid(True)
+        axes[3].set_ylim(0, 1.05)
 
         plt.tight_layout()
         plt.show()
