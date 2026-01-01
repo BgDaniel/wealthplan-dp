@@ -100,6 +100,13 @@ class BellmanOptimizer(ABC):
         ]
         self.n_months = len(self.months)
 
+        self.time_grid = (
+            np.array(
+                [(m - self.months[0]).days / 365.0 for m in self.months],
+                dtype=np.float64,
+            )
+        )
+
         self.cache = ResultCache(enabled=save, run_id=run_id)
 
         self.value_function: Dict[dt.date, np.ndarray()] = {}

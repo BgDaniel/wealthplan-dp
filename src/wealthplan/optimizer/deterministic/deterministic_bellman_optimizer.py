@@ -149,37 +149,52 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         Given self.policy filled per date and self.wealth_grid, compute
         opt_wealth, opt_consumption and monthly_cashflows by forward simulation.
         """
-        n_months = self.n_months
-        wealth_path = np.zeros(n_months)
-        consumption_path = np.zeros(n_months)
-        cashflow_path = np.zeros(n_months)
+        # prepare deterministic cashflows per month
+        cashflow_list = np.array([self.monthly_cashflow(t) for t in self.months])
 
-        # month 0
+        # initialize arrays: shape (n_months)
+        wealth_path = np.zeros(self.n_months)
+        consumption_path = np.zeros(self.n_months)
+        cashflow_path = np.zeros(self.n_months)
+
+        # initial month
         wealth_path[0] = self.initial_wealth
-        cf0 = self.monthly_cashflow(self.months[0])
-        consumption_path[0] = float(
-            np.interp(wealth_path[0], self.wealth_grid, self.policy[self.months[0]])
-        )
-        cashflow_path[0] = cf0
-        current_wealth = (wealth_path[0] + cf0 - consumption_path[0]) * (
-            1 + self.monthly_return
-        )
-        wealth_path[0] = wealth_path[0]  # keep initial wealth as-is in index 0
+        cashflow_path[0] = cashflow_list[0]
 
-        # forward roll for months 1..n-1 (we only simulate up to n_months - 1)
-        for t in range(1, n_months - 1):
-            date_t = self.months[t]
-            cf_t = self.monthly_cashflow(date_t)
-            cashflow_path[t] = cf_t
+        consumption_path[0] = np.interp(
+            wealth_path[0],
+            self.wealth_grid,
+            self.policy[self.months[0]],
+        )
 
-            c_opt = float(
-                np.interp(current_wealth, self.wealth_grid, self.policy[date_t])
+        # forward rollout vectorized
+        for t in range(1, self.n_months):
+            month = self.months[t]
+
+            W_prev = wealth_path[t - 1].copy()
+
+            # wealth update
+            W_current = (W_prev + cashflow_list[t - 1] - consumption_path[t - 1]) * (
+                1.0 + self.monthly_return
             )
-            consumption_path[t] = c_opt
 
-            # wealth for next month (record current after return)
-            current_wealth = (current_wealth + cf_t - c_opt) * (1 + self.monthly_return)
-            wealth_path[t] = current_wealth
+            W_current = np.clip(
+                W_current,
+                self.wealth_grid[0],  # lower bound
+                self.wealth_grid[-1],  # upper bound
+            )
+
+            wealth_path[t] = W_current
+
+            if t < self.n_months - 1:
+
+                consumption_path[t] = np.interp(
+                    W_current,
+                    self.wealth_grid,
+                    self.policy[month],
+                )
+
+            cashflow_path[t] = cashflow_list[t]
 
         # Save as pandas Series indexed by months
         self.opt_wealth = pd.Series(wealth_path, index=self.months)

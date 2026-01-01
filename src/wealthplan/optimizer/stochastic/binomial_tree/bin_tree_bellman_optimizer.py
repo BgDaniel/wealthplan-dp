@@ -19,6 +19,7 @@ from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
 )
+from wealthplan.optimizer.math_tools.dynamic_wealth_grid import DynamicGridBuilder
 from wealthplan.optimizer.math_tools.penality_functions import (
     PenalityFunction,
     square_penality,
@@ -37,7 +38,17 @@ logger = logging.getLogger(__name__)
 
 @njit(parallel=True)
 def compute_optimal_policy(
-    wealth_grid, u, d, p, beta, v_t_next_j, v_t_next_jp1, q_t, cf_t, c_step
+    wealth_grid,
+    u,
+    d,
+    p,
+    beta,
+    v_t_next_j,
+    v_t_next_jp1,
+    q_t,
+    cf_t,
+    c_step,
+    wealth_grid_next,
 ):
     n_w = wealth_grid.shape[0]
 
@@ -52,8 +63,8 @@ def compute_optimal_policy(
         W_up_arr = (W + cf_t - c_cands) * u
         W_down_arr = (W + cf_t - c_cands) * d
 
-        V_up_arr = np.interp(W_up_arr, wealth_grid, v_t_next_jp1)
-        V_down_arr = np.interp(W_down_arr, wealth_grid, v_t_next_j)
+        V_up_arr = np.interp(W_up_arr, wealth_grid_next, v_t_next_jp1)
+        V_down_arr = np.interp(W_down_arr, wealth_grid_next, v_t_next_j)
 
         instant_util_arr = crra_utility_numba(c_cands)
         total_val_arr = instant_util_arr + beta * q_t * (
@@ -93,7 +104,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         seed: int = 42,
         save: bool = True,
         stochastic: bool = True,
-        dynamic_wealth_grid: bool = True,
+        use_dynamic_wealth_grid: bool = False,
+        max_grid_iteration: int = 100,
     ) -> None:
         """
         Initialize the binomial tree Bellman optimizer.
@@ -120,13 +132,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         self.survival_model = survival_model
         self.current_age = current_age
 
-        self.age_grid = (
-            np.array(
-                [(m - self.months[0]).days / 365.0 for m in self.months],
-                dtype=np.float64,
-            )
-            + self.current_age
-        )
+        self.age_grid = self.time_grid + self.current_age
 
         # Compute conditional survival probabilities over one time step
         self.survival_probs = survival_model.conditional_survival_probabilities(
@@ -141,11 +147,15 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # Compute binomial parameters
         self._compute_binomial_params()
 
-        self.dynamic_wealth_grid = dynamic_wealth_grid
+        self.use_dynamic_wealth_grid = use_dynamic_wealth_grid
 
+        self.dynamic_grid_builder = None
+        self.dynamic_wealth_grid = None
         self.opt_wealth_det = None
 
-        if self.dynamic_wealth_grid:
+        self.max_grid_iteration = max_grid_iteration
+
+        if self.use_dynamic_wealth_grid:
             self._roll_out_wealth_grid()
 
     def _roll_out_wealth_grid(self) -> None:
@@ -167,6 +177,16 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
         deterministic_optimizer.solve()
         self.opt_wealth_det = deterministic_optimizer.opt_wealth.values
+
+        self.dynamic_grid_builder = DynamicGridBuilder(
+            T=self.time_grid[-1],
+            delta_w=self.w_step,
+            n_steps=self.n_months,
+            c_step=self.c_step,
+            L_t=self.opt_wealth_det,
+        )
+
+        self.dynamic_wealth_grid = self.dynamic_grid_builder.build_initial_grid()
 
     def _compute_binomial_params(self) -> None:
         """
@@ -194,13 +214,18 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         Results are stored in self.value_function and self.policy keyed by date.
         Handles binomial tree structure for risky asset and survival probabilities.
         """
-        n_w = len(self.wealth_grid)
         n_t = self.n_months
+
+        wealth_grid = (
+            self.dynamic_wealth_grid[-1]
+            if self.use_dynamic_wealth_grid
+            else self.wealth_grid
+        )
 
         # -------------------------
         # Initialize terminal value
         # -------------------------
-        v_terminal = self.terminal_penalty(self.wealth_grid)
+        v_terminal = self.terminal_penalty(wealth_grid)
         v_t_next = np.array([v_terminal.copy() for _ in range(n_t)])
 
         # -------------------------
@@ -231,15 +256,30 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                 continue
 
             n_s = t_idx + 1  # number of stock nodes at this time
+
+            wealth_grid = (
+                self.dynamic_wealth_grid[t_idx]
+                if self.use_dynamic_wealth_grid
+                else self.wealth_grid
+            )
+
+            n_w = len(wealth_grid)
+
             v_t = np.zeros((n_s, n_w), dtype=np.float32)
             policy_t = np.zeros((n_s, n_w), dtype=np.float32)
 
             results = []
 
+            wealth_grid_next = (
+                self.dynamic_wealth_grid[t_idx + 1]
+                if self.use_dynamic_wealth_grid
+                else self.wealth_grid
+            )
+
             for j in range(n_s):
                 results.append(
                     compute_optimal_policy(
-                        self.wealth_grid,
+                        wealth_grid,
                         self.u,
                         self.d,
                         self.p,
@@ -249,6 +289,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                         q_t,
                         cf_t,
                         self.c_step,
+                        wealth_grid_next,
                     )
                 )
 
@@ -294,11 +335,17 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         wealth_paths[0, :] = self.initial_wealth
         cashflow_paths[0, :] = cashflow_list[0]
 
+        wealth_grid = (
+            self.dynamic_wealth_grid[0]
+            if self.use_dynamic_wealth_grid
+            else self.wealth_grid
+        )
+
         # consumption for t=0
         node_idx0 = 0
         consumption_paths[0, :] = np.interp(
             wealth_paths[0, :],
-            self.wealth_grid,
+            wealth_grid,
             self.policy[self.months[0]][node_idx0, :],
         )
 
@@ -310,19 +357,33 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             W_prev = wealth_paths[t - 1, :].copy()
 
             # wealth update
-            W_next = W_prev + cashflow_list[t] - consumption_paths[t - 1]
-            wealth_paths[t, :] = W_next * np.where(
+            W_current = (W_prev + cashflow_list[t - 1] - consumption_paths[t - 1]) * np.where(
                 updown_paths[t - 1, :] == 1, self.u, self.d
             )
+
+            W_current = np.clip(
+                W_current,
+                wealth_grid[0],  # lower bound
+                wealth_grid[-1],  # upper bound
+            )
+
+            wealth_paths[t, :] = W_current
 
             # compute node indices: cumulative sum of up moves along each path
             node_idx = updown_paths[:t, :].sum(axis=0)
 
             if t < self.n_months - 1:
+
+                wealth_grid = (
+                    self.dynamic_wealth_grid[t]
+                    if self.use_dynamic_wealth_grid
+                    else self.wealth_grid
+                )
+
                 for sim_idx in np.where(alive_mask)[0]:
                     consumption_paths[t, sim_idx] = np.interp(
-                        W_prev[sim_idx],
-                        self.wealth_grid,
+                        W_current[sim_idx],
+                        wealth_grid,
                         self.policy[month][node_idx[sim_idx], :],
                     )
 
@@ -339,6 +400,98 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
         self.opt_consumption = pd.DataFrame(consumption_paths, index=self.months)
         self.monthly_cashflows = pd.DataFrame(cashflow_paths, index=self.months)
+
+    def _solve(self) -> None:
+        """
+        Generic solver that dynamically calls the child class implementation
+        of backward induction and roll-forward to generate optimal paths.
+
+        Stores results as instance attributes.
+
+        Returns:
+            None
+        """
+        # Backward induction step
+        self._backward_induction()
+
+        # Forward roll-out of paths
+        logger.info("Rolling forward to compute optimal paths.")
+        self._roll_forward()
+
+    def _solve_with_dynamic_grid(self, tolerance: float = 1e-3) -> None:
+        """
+        Generic solver that dynamically calls the child class implementation
+        of backward induction and roll-forward to generate optimal paths.
+
+        Stores results as instance attributes.
+
+        Logging is included to track the evolution of grid boundaries.
+
+        Args:
+            tolerance: float, tolerance to check if upper/lower bounds have stabilized
+        """
+        # Initial solver step
+        self.cache.clear()
+
+        self._backward_induction()
+        self._roll_forward()
+
+        self.plot()
+
+        # Get current upper/lower bounds
+        current_upper = self.dynamic_grid_builder.upper_bounds
+        current_lower = self.dynamic_grid_builder.lower_bounds
+
+        logging.info("Initial grid boundaries set.")
+
+        for i in range(1, self.max_grid_iteration + 1):
+            self.cache.clear()
+
+            # Extend grid based on simulations
+            self.dynamic_wealth_grid = self.dynamic_grid_builder.extend_grid(
+                simulations=self.opt_wealth.values
+            )
+
+            next_upper = self.dynamic_grid_builder.upper_bounds
+            next_lower = self.dynamic_grid_builder.lower_bounds
+
+            # Logging boundaries for this iteration
+            logging.debug("Iteration %d:", i)
+
+            # Check if grid has stabilized
+            upper_stable = np.allclose(current_upper, next_upper, atol=tolerance)
+            lower_stable = np.allclose(current_lower, next_lower, atol=tolerance)
+
+            if upper_stable and lower_stable:
+                logging.info("Dynamic grid stabilized after %d iterations.", i)
+                break  # stop iteration if boundaries are stable
+
+            # Update for next iteration
+            current_upper = next_upper.copy()
+            current_lower = next_lower.copy()
+
+            # Solve again with updated grid
+            self._backward_induction()
+            self._roll_forward()
+
+    def solve(self) -> None:
+        """
+        Generic solver that dynamically calls the child class implementation
+        of backward induction and roll-forward to generate optimal paths.
+
+        Stores results as instance attributes.
+
+        Returns:
+            None
+        """
+        logger.info("%s.solve() started.", self.__class__.__name__)
+
+        if self.use_dynamic_wealth_grid:
+            self._solve_with_dynamic_grid()
+        else:
+            self._solve()
+
+        logger.info("%s.solve() finished.", self.__class__.__name__)
 
     def plot(
         self,
@@ -535,13 +688,21 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             label="Sample Path",
         )
 
-        if self.dynamic_wealth_grid:
+        if self.dynamic_grid_builder:
             axes[1].plot(
                 months,
                 self.opt_wealth_det,
                 color="tab:cyan",
                 lw=1.5,
                 label="Optimal Wealth (det.)",
+            )
+
+            axes[1].plot(
+                months, self.dynamic_grid_builder.upper_bounds, color="tab:grey", lw=2.0
+            )
+
+            axes[1].plot(
+                months, self.dynamic_grid_builder.lower_bounds, color="tab:grey", lw=2.0
             )
 
         axes[1].legend(fontsize=legend_size)
