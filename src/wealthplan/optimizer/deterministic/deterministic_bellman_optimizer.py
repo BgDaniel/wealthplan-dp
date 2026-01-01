@@ -12,7 +12,7 @@ from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.cashflows.base import Cashflow
 
 from wealthplan.optimizer.bellman_optimizer import (
-    BellmanOptimizer,
+    BellmanOptimizer, create_grid,
 )
 from wealthplan.optimizer.math_tools.penality_functions import (
     PenalityFunction,
@@ -37,7 +37,10 @@ def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
     for i in prange(n_w):
         W = wealth_grid[i]
 
-        c_cands = np.arange(0.0, W + cf_t + 10e-5, c_step, dtype=np.float32)
+        # make sure, yu do not leave the wealth grid due to low consumption if we
+        # are already at the upper bound
+        c_min = max(0.0, W + cf_t - wealth_grid[-1] / (1.0 + r))
+        c_cands = create_grid(c_min, W + cf_t, c_step)
 
         W_next = (W + cf_t - c_cands) * (1.0 + r)
         V_next = np.interp(W_next, wealth_grid, v_t_next)
@@ -108,7 +111,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             desc="Backward Induction",
         ):
             date_t = self.months[t]
-            cf_t = self.monthly_cashflow(date_t)
+            cf_t = self.cf[t]
 
             # Check cache
             if self.cache.has(date_t):
@@ -149,9 +152,6 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         Given self.policy filled per date and self.wealth_grid, compute
         opt_wealth, opt_consumption and monthly_cashflows by forward simulation.
         """
-        # prepare deterministic cashflows per month
-        cashflow_list = np.array([self.monthly_cashflow(t) for t in self.months])
-
         # initialize arrays: shape (n_months)
         wealth_path = np.zeros(self.n_months)
         consumption_path = np.zeros(self.n_months)
@@ -159,7 +159,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
 
         # initial month
         wealth_path[0] = self.initial_wealth
-        cashflow_path[0] = cashflow_list[0]
+        cashflow_path[0] = self.cf[0]
 
         consumption_path[0] = np.interp(
             wealth_path[0],
@@ -174,7 +174,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             W_prev = wealth_path[t - 1].copy()
 
             # wealth update
-            W_current = (W_prev + cashflow_list[t - 1] - consumption_path[t - 1]) * (
+            W_current = (W_prev + self.cf[t - 1] - consumption_path[t - 1]) * (
                 1.0 + self.monthly_return
             )
 
@@ -194,7 +194,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
                     self.policy[month],
                 )
 
-            cashflow_path[t] = cashflow_list[t]
+            cashflow_path[t] = self.cf[t]
 
         # Save as pandas Series indexed by months
         self.opt_wealth = pd.Series(wealth_path, index=self.months)
@@ -240,15 +240,9 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
 
         months = self.months
 
-        det_cf = (
-            self.monthly_cashflows.iloc[:, 0]
-            if isinstance(self.monthly_cashflows, pd.DataFrame)
-            else self.monthly_cashflows
-        )
-
         cons: np.ndarray = self.opt_consumption.values
         wealth: np.ndarray = self.opt_wealth.values
-        inv: np.ndarray = det_cf.values - cons
+        inv: np.ndarray = self.cf - cons
 
         # ============================
         # Plotting
@@ -310,8 +304,8 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             yfmt=True,
         )
         axes[0].plot(
-            det_cf.index,
-            det_cf.values,
+            months,
+            self.cf,
             color="blue",
             linestyle="--",
             lw=1.0,

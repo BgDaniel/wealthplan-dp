@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 import math
+from wealthplan.optimizer.bellman_optimizer import create_grid
 
 
 class DynamicGridBuilder:
@@ -10,10 +11,13 @@ class DynamicGridBuilder:
         self,
         T: float,
         delta_w: float,
+        w_max: float,
         n_steps: int,
         L_t: np.ndarray,
         c_step: float,
-        alpha: float = 0.2
+        cf: np.nd.array,
+        alpha: float = 0.2,
+        max_grid_shift: float = 0.1,
     ):
         """
         W0      : initial wealth
@@ -24,14 +28,19 @@ class DynamicGridBuilder:
                   must satisfy L_t[0] = W0 and L_t[-1] = 0
         """
         assert len(L_t) == n_steps, "L_t length must match n_steps"
-        assert abs(L_t[-1] - 0.0) <= c_step, \
-            f"L_t[-1] must be within one grid step (±{self.c_step}) of 0"
+        assert (
+            abs(L_t[-1] - 0.0) <= c_step
+        ), f"L_t[-1] must be within one grid step (±{self.c_step}) of 0"
 
         self.T = T
         self.alpha = alpha
         self.delta_w = delta_w
+        self.w_max = w_max
         self.n_steps = n_steps
         self.L_t = L_t.astype(np.float32)
+
+        self.cf = cf
+        self.max_grid_shift = max_grid_shift
 
         # Time grid
         self.t = np.linspace(0, T, n_steps)
@@ -48,11 +57,13 @@ class DynamicGridBuilder:
         upper_boundary = self.L_t * np.exp(gamma_upper)
         lower_boundary = self.L_t * np.exp(gamma_lower)
 
-        for u, l in zip(upper_boundary, lower_boundary):
-            if u - l > 0:
-                w_values = np.arange(l - self.delta_w, u + self.delta_w, self.delta_w)
+        for i, (u, l) in enumerate(zip(upper_boundary, lower_boundary)):
+            if 0 < i < len(upper_boundary) - 1:
+                u += self.cf[i]
+
+            if abs(u - l) > 10e-5:
                 # Clip to avoid negative wealth
-                w_values = np.clip(w_values, 0.0, None)
+                w_values = create_grid(max(0.0, l), u, self.delta_w)
             else:
                 w_values = np.array([l], dtype=np.float32)
 
@@ -68,7 +79,7 @@ class DynamicGridBuilder:
         boundary_threshold: fraction of sims at boundary to trigger expansion
         lower_percentile, upper_percentile: percentiles for normal-fit interior distribution
         """
-        for t in range(self.n_steps):
+        for t in range(1, self.n_steps - 1):
             sim_t = simulations[t]
             grid_t = self.grid[t]
 
@@ -79,42 +90,32 @@ class DynamicGridBuilder:
             pct_lower = np.mean(sim_t <= lower_bound)
             pct_upper = np.mean(sim_t >= upper_bound)
 
-            # --- STEP 1: Shrink boundaries only if current boundary is outside simulations ---
-            if lower_bound < np.min(sim_t):
-                new_lower = np.min(sim_t)  # shrink lower only if below all sims
-            else:
-                new_lower = lower_bound  # keep
+            if pct_lower == 0.0 and pct_upper == 0.0:
+                # shrink wealth grid as no simuation touches the boundary
+                new_lower = np.min(sim_t) - self.delta_w
+                new_upper = np.max(sim_t) + self.delta_w
+                self.grid[t] = create_grid(new_lower, new_upper, self.delta_w)
+            elif pct_lower > 0.0 and pct_upper == 0.0:
+                new_lower = (
+                    np.min(sim_t) - pct_lower / 100.0 * self.max_grid_shift * self.w_max
+                )
+                new_upper = np.max(sim_t) + self.delta_w
+            elif pct_lower == 0.0 and pct_upper > 0.0:
+                new_lower = np.min(sim_t) - self.delta_w
+                new_upper = (
+                    np.max(sim_t) + pct_upper / 100.0 * self.max_grid_shift * self.w_max
+                )
+            elif pct_lower > 0.0 and pct_upper > 0.0:
+                new_lower = (
+                    np.min(sim_t) - pct_lower / 100.0 * self.max_grid_shift * self.w_max
+                )
+                new_upper = (
+                    np.max(sim_t) + pct_upper / 100.0 * self.max_grid_shift * self.w_max
+                )
 
-            if upper_bound > np.max(sim_t):
-                new_upper = np.max(sim_t)  # shrink upper only if above all sims
-            else:
-                new_upper = upper_bound
+            new_lower = np.max(0.0, new_lower)
 
-            # --- STEP 2: Fit normal distribution to interior points ---
-            interior_sims = sim_t[(sim_t > new_lower) & (sim_t < new_upper)]
-
-            if len(interior_sims) > 0:
-                mu = np.mean(interior_sims)
-                sigma = np.std(interior_sims)
-
-                # Calculate percentiles from normal fit
-                norm_lower = norm.ppf(lower_percentile / 100.0, loc=mu, scale=sigma)
-                norm_upper = norm.ppf(upper_percentile / 100.0, loc=mu, scale=sigma)
-
-                # Update boundaries based on normal fit
-                new_lower = min(new_lower, norm_lower)
-                new_upper = max(new_upper, norm_upper)
-            else:
-                # If all simulations are at boundary, expand a bit
-                new_lower = new_lower - self.delta_w
-                new_upper = new_upper + self.delta_w
-
-            # Ensure at least one grid point
-            if new_upper <= new_lower:
-                new_upper = new_lower + self.delta_w
-
-            # --- STEP 3: Update the grid ---
-            self.grid[t] = np.arange(new_lower, new_upper + self.delta_w, self.delta_w)
+            self.grid[t] = create_grid(new_lower, new_upper, self.delta_w)
 
         return self.grid
 
@@ -163,9 +164,7 @@ if __name__ == "__main__":
     t_grid = np.linspace(0, T, n_steps)
     L_t = W0 * (1 - (t_grid / T) ** 2)  # quadratic decay instead of linear
 
-    model = DynamicGridBuilder(
-        T=T, delta_w=delta_w, n_steps=n_steps, L_t=L_t
-    )
+    model = DynamicGridBuilder(T=T, delta_w=delta_w, n_steps=n_steps, L_t=L_t)
 
     # Access grid and plot
     print("Grid at t=0:", model.grid[0])

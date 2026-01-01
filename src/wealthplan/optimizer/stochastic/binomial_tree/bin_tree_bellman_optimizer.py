@@ -15,7 +15,7 @@ from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.cashflows.base import Cashflow
 
 
-from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer
+from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer, create_grid
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
 )
@@ -49,6 +49,7 @@ def compute_optimal_policy(
     cf_t,
     c_step,
     wealth_grid_next,
+    r
 ):
     n_w = wealth_grid.shape[0]
 
@@ -58,7 +59,11 @@ def compute_optimal_policy(
     for i in prange(n_w):
         W = wealth_grid[i]
 
-        c_cands = np.arange(0.0, W + cf_t + 10e-5, c_step, dtype=np.float32)
+        # make sure, you only consider admissible consumption levels in order to enter
+        # the next admissible wealth region
+        c_min = max(0.0, W + cf_t - wealth_grid_next[-1] / u)
+        c_max = min(W + cf_t, W + cf_t - wealth_grid_next[0] / d)
+        c_cands = create_grid(c_min, c_max, c_step)
 
         W_up_arr = (W + cf_t - c_cands) * u
         W_down_arr = (W + cf_t - c_cands) * d
@@ -181,9 +186,11 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         self.dynamic_grid_builder = DynamicGridBuilder(
             T=self.time_grid[-1],
             delta_w=self.w_step,
+            w_max=self.w_max,
             n_steps=self.n_months,
             c_step=self.c_step,
             L_t=self.opt_wealth_det,
+            cf=self.cf
         )
 
         self.dynamic_wealth_grid = self.dynamic_grid_builder.build_initial_grid()
@@ -198,6 +205,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         if self.stochastic:
             self.u: float = math.exp(self.sigma * self.sqrt_dt)
             self.d: float = 1.0 / self.u
+
+            assert self.d < 1.0 + self.monthly_return < self.u, "Binomial tree model is not arbitrage free!"
 
             self.p: float = (1.0 + self.monthly_return - self.d) / (self.u - self.d)
             self.q: float = 1.0 - self.p
@@ -231,14 +240,14 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         # -------------------------
         # Backward induction
         # -------------------------
-        for t_idx in tqdm(
+        for t in tqdm(
             reversed(range(n_t - 1)),  # loop backwards
             total=n_t - 1,  # total steps for the progress bar
             desc="Backward Induction",  # description
         ):
-            date_t = self.months[t_idx]
-            cf_t = self.monthly_cashflow(date_t)
-            q_t = self.survival_probs[t_idx]
+            date_t = self.months[t]
+            cf_t = self.cf[t]
+            q_t = self.survival_probs[t]
 
             # Check cache
             if self.cache.has(date_t):
@@ -255,10 +264,10 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                 v_t_next = v_t
                 continue
 
-            n_s = t_idx + 1  # number of stock nodes at this time
+            n_s = t + 1  # number of stock nodes at this time
 
             wealth_grid = (
-                self.dynamic_wealth_grid[t_idx]
+                self.dynamic_wealth_grid[t]
                 if self.use_dynamic_wealth_grid
                 else self.wealth_grid
             )
@@ -271,7 +280,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             results = []
 
             wealth_grid_next = (
-                self.dynamic_wealth_grid[t_idx + 1]
+                self.dynamic_wealth_grid[t + 1]
                 if self.use_dynamic_wealth_grid
                 else self.wealth_grid
             )
@@ -290,6 +299,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                         cf_t,
                         self.c_step,
                         wealth_grid_next,
+                        self.monthly_return,
                     )
                 )
 
@@ -315,9 +325,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         """
         rng = np.random.default_rng(self.seed)
 
-        # prepare deterministic cashflows per month
-        cashflow_list = np.array([self.monthly_cashflow(t) for t in self.months])
-
         # generate random up/down paths: shape (n_sims, n_months-1)
         updown_paths = rng.integers(0, 2, size=(self.n_months - 1, self.n_sims))
 
@@ -333,7 +340,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
         # initial month
         wealth_paths[0, :] = self.initial_wealth
-        cashflow_paths[0, :] = cashflow_list[0]
+        cashflow_paths[0, :] = self.cf[0]
 
         wealth_grid = (
             self.dynamic_wealth_grid[0]
@@ -357,7 +364,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             W_prev = wealth_paths[t - 1, :].copy()
 
             # wealth update
-            W_current = (W_prev + cashflow_list[t - 1] - consumption_paths[t - 1]) * np.where(
+            W_current = (W_prev + self.cf[t - 1] - consumption_paths[t - 1]) * np.where(
                 updown_paths[t - 1, :] == 1, self.u, self.d
             )
 
@@ -387,7 +394,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                         self.policy[month][node_idx[sim_idx], :],
                     )
 
-            cashflow_paths[t, :] = cashflow_list[t]
+            cashflow_paths[t, :] = self.cf[t]
 
             # zero out dead paths
             dead_mask = ~alive_mask
@@ -567,12 +574,6 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         cons_mean, cons_bands = mean_and_bands(self.opt_consumption)
         wealth_mean, wealth_bands = mean_and_bands(self.opt_wealth)
 
-        det_cf = (
-            self.monthly_cashflows.iloc[:, 0]
-            if isinstance(self.monthly_cashflows, pd.DataFrame)
-            else self.monthly_cashflows
-        )
-
         cons_sample = self.opt_consumption.iloc[:, sample_sim]
         wealth_sample = self.opt_wealth.iloc[:, sample_sim]
 
@@ -659,8 +660,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             label="Sample Path",
         )
         axes[0].plot(
-            det_cf.index,
-            det_cf.values,
+            months,
+            self.cf,
             color="blue",
             linestyle="--",
             lw=1.0,
@@ -709,7 +710,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         axes[1].tick_params(axis="both", labelsize=tick_size)
 
         # --- 3. Investment / Withdrawal ---
-        inv_df = det_cf.values[:, None] - self.opt_consumption.values
+        inv_df = self.cf[:, np.newaxis] - self.opt_consumption.values
         inv_df = pd.DataFrame(inv_df, index=self.opt_consumption.index)
 
         inv_mean, inv_bands = mean_and_bands(inv_df)

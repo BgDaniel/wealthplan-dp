@@ -4,6 +4,7 @@ import datetime as dt
 from typing import List, Dict
 import numpy as np
 import pandas as pd
+from numba import njit
 
 from src.wealthplan.cashflows.base import Cashflow
 from wealthplan.cache.result_cache import ResultCache
@@ -18,6 +19,26 @@ from wealthplan.optimizer.math_tools.utility_functions import UtilityFunction
 
 
 logger = logging.getLogger(__name__)
+
+
+@njit
+def create_grid(min_val: float, max_val: float, delta: float):
+    n = int(np.floor((max_val - min_val) / delta))
+
+    size = n + 1
+    if min_val + n * delta < max_val:
+        size += 1
+
+    grid = np.empty(size, dtype=np.float32)
+
+    for i in range(n + 1):
+        grid[i] = min_val + i * delta
+
+    if size > n + 1:
+        grid[-1] = max_val
+
+    return grid
+
 
 
 # ---------------------------
@@ -90,15 +111,15 @@ class BellmanOptimizer(ABC):
         # Derived / prepared attributes
         self.months: List[dt.date] = []
         self.n_months: int = 0
-        self.wealth_grid: np.ndarray = np.arange(
-            0.0, self.w_max, self.w_step, dtype=np.float32
-        )
+        self.wealth_grid: np.ndarray = create_grid(0.0, self.w_max, self.w_step)
 
         self.months = [
             d.date()
             for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
         ]
         self.n_months = len(self.months)
+
+        self.cf = np.array([self.monthly_cashflow(month) for month in self.months])
 
         self.time_grid = (
             np.array(

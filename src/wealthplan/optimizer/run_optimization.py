@@ -66,7 +66,7 @@ def main() -> None:
 
     yearly_return: float = 0.06
 
-    save = False
+    save = True
 
     # ----------------------------
     # Deterministic Bellman solver
@@ -113,7 +113,7 @@ def main() -> None:
         sigma=sigma,
         survival_model=survival_model,
         current_age=current_age,
-        w_max=50_000.0,
+        w_max=100_000.0,
         w_step=50.0,
         c_step=50.0,
         stochastic=True,
@@ -134,7 +134,7 @@ def main() -> None:
         sigma=sigma,
         survival_model=survival_model,
         current_age=current_age,
-        w_max=50_000.0,
+        w_max=100_000.0,
         w_step=50.0,
         c_step=50.0,
         stochastic=True,
@@ -142,8 +142,8 @@ def main() -> None:
         save=save
     )
 
-    #bin_tree_optimizer_dynamic.solve()
-    #bin_tree_optimizer_dynamic.plot()
+    bin_tree_optimizer_dynamic.solve()
+    bin_tree_optimizer_dynamic.plot()
 
 
 if __name__ == "__main__":
