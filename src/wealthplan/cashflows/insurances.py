@@ -3,10 +3,10 @@
 import datetime as dt
 from typing import Literal
 
-from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 
 
-class Insurance(Cashflow):
+class Insurance(CashflowBase):
     """
     Represents recurring insurance expenses.
 

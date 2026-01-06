@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cache.result_cache import ResultCache
 from wealthplan.optimizer.math_tools.penality_functions import (
     square_penality,
@@ -65,7 +65,8 @@ class BellmanOptimizer(ABC):
         retirement_date: dt.date,
         initial_wealth: float,
         yearly_return: float,
-        cashflows: List[Cashflow],
+        beta: float,
+        cashflows: List[CashflowBase],
         instant_utility: UtilityFunction = crra_utility,
         terminal_penalty: PenalityFunction = square_penality,
         dt: float = 1.0 / 12.0,
@@ -96,13 +97,13 @@ class BellmanOptimizer(ABC):
         self.retirement_date = retirement_date
         self.initial_wealth: float = initial_wealth
         self.yearly_return: float = yearly_return
+        self.beta = beta
         self.monthly_return: float = (1 + self.yearly_return) ** (1/12) - 1
-        self.cashflows: List[Cashflow] = cashflows
+        self.cashflows: List[CashflowBase] = cashflows
         self.instant_utility: UtilityFunction = instant_utility
         self.terminal_penalty: PenalityFunction = terminal_penalty
 
         self.dt = dt
-        self.beta: float = 1.0 / (1.0 + self.monthly_return)
         self.w_max: float = w_max
         self.w_step: float = w_step
         self.c_step: float = c_step

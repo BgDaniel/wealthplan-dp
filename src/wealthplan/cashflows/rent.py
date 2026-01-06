@@ -1,7 +1,7 @@
 import datetime as dt
-from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 
-class Rent(Cashflow):
+class Rent(CashflowBase):
     """Represents monthly rent payments."""
 
     def __init__(self, monthly_amount: float) -> None:

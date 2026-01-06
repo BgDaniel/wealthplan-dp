@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import datetime as dt
 
-class Cashflow(ABC):
+class CashflowBase(ABC):
     """Abstract base class for any cashflow."""
 
     @abstractmethod

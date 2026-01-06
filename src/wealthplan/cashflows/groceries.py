@@ -2,10 +2,10 @@
 
 import datetime as dt
 
-from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 
 
-class Groceries(Cashflow):
+class Groceries(CashflowBase):
     """
     Represents recurring grocery expenses.
 

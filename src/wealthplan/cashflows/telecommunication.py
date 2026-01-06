@@ -1,9 +1,9 @@
 import datetime as dt
 
-from wealthplan.cashflows.base import Cashflow
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 
-class Telecommunication(Cashflow):
+class Telecommunication(CashflowBase):
     """Represents monthly telecommunication payments (cell phone, internet)."""
 
     def __init__(self, monthly_amount: float) -> None:

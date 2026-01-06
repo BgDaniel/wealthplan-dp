@@ -9,7 +9,7 @@ from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
 
 
-from wealthplan.cashflows.base import Cashflow
+from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.result_cache import ResultCache
 from wealthplan.optimizer.stochastic.survival_process.survival_process import (
@@ -64,7 +64,7 @@ class LSMCBellmanOptimizer:
         start_date: dt.date,
         end_date: dt.date,
         wealth_0: float,
-        cashflows: List[Cashflow],
+        cashflows: List[CashflowBase],
         gbm_returns: GBM,
         survival_process: SurvivalProcess,
         n_sims: int,
@@ -91,7 +91,7 @@ class LSMCBellmanOptimizer:
         self.start_date: dt.date = start_date
         self.end_date: dt.date = end_date
         self.wealth_0 = wealth_0
-        self.cashflows: List[Cashflow] = cashflows
+        self.cashflows: List[CashflowBase] = cashflows
         self.beta: float = beta
 
         self.max_wealth = max_wealth

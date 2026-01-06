@@ -12,7 +12,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
-from wealthplan.cashflows.base import Cashflow
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 
 from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer, create_grid
@@ -96,7 +96,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         retirement_date: dt.date,
         initial_wealth: float,
         yearly_return: float,
-        cashflows: List[Cashflow],
+        cashflows: List[CashflowBase],
         sigma: float,
         survival_model: SurvivalModel,
         current_age: int,

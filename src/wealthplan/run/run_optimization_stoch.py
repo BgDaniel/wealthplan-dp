@@ -1,8 +1,8 @@
 import datetime as dt
 from typing import List
 
-from financial_parameter_loader import FinancialParametersLoader
-from src.wealthplan.cashflows.base import Cashflow
+from parameter_loader import FinancialParametersLoader
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.stochastic.binomial_tree.bin_tree_bellman_optimizer import (
     BinTreeBellmanOptimizer,
@@ -35,7 +35,7 @@ def main() -> None:
     # ----------------------------
     # Load cashflows
     # ----------------------------
-    cashflows: List[Cashflow] = FinancialParametersLoader(
+    cashflows: List[CashflowBase] = FinancialParametersLoader(
         filename="lifecycle_params.yaml"
     ).load()
 

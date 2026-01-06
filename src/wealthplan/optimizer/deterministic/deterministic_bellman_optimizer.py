@@ -9,7 +9,7 @@ from numba import prange, njit
 from tqdm import tqdm
 
 from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
-from wealthplan.cashflows.base import Cashflow
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.bellman_optimizer import (
     BellmanOptimizer, create_grid,
@@ -49,6 +49,7 @@ def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
         total_val_arr = instant_util_arr + beta * V_next
 
         idx_max = np.argmax(total_val_arr)
+
         v_opt[i] = total_val_arr[idx_max]
         consumption_opt[i] = c_cands[idx_max]
 
@@ -68,7 +69,8 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         retirement_date: dt.date,
         initial_wealth: float,
         yearly_return: float,
-        cashflows: List[Cashflow],
+        beta: float,
+        cashflows: List[CashflowBase],
         instant_utility: UtilityFunction = crra_utility,
         terminal_penalty: PenalityFunction = square_penality,
         w_max: float = 750_000.0,
@@ -88,6 +90,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             retirement_date=retirement_date,
             initial_wealth=initial_wealth,
             yearly_return=yearly_return,
+            beta=beta,
             cashflows=cashflows,
             instant_utility=instant_utility,
             terminal_penalty=terminal_penalty,

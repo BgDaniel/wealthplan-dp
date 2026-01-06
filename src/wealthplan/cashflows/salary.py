@@ -1,8 +1,8 @@
 import datetime as dt
-from src.wealthplan.cashflows.base import Cashflow
+from src.wealthplan.cashflows.cashflow_base import CashflowBase
 
 
-class Salary(Cashflow):
+class Salary(CashflowBase):
     """Represents a monthly salary until retirement."""
 
     def __init__(self, monthly_amount: float, retirement_date: dt.date) -> None:
