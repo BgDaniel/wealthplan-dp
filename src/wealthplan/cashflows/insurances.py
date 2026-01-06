@@ -22,11 +22,13 @@ class Insurance(Cashflow):
         Payment frequency: 'M' for monthly, 'Y' for yearly.
     """
 
-    def __init__(self, amount: float, frequency: Literal['M', 'Y']) -> None:
-        if frequency not in ('M', 'Y'):
+    def __init__(self, amount: float, name: str, frequency: Literal["M", "Y"]) -> None:
+        self.amount = amount
+        self.name = name
+
+        if frequency not in ("M", "Y"):
             raise ValueError("frequency must be 'M' (monthly) or 'Y' (yearly)")
 
-        self.amount = amount
         self.frequency = frequency
 
     def cashflow(self, date: dt.date) -> float:
@@ -45,9 +47,9 @@ class Insurance(Cashflow):
         float
             Insurance expense as a negative cashflow on the payment date, else 0.
         """
-        if self.frequency == 'M' and date.day == 1:
+        if self.frequency == "M" and date.day == 1:
             return -self.amount
-        elif self.frequency == 'Y' and date.day == 1 and date.month == 1:
+        elif self.frequency == "Y" and date.day == 1 and date.month == 1:
             return -self.amount
         else:
             return 0.0

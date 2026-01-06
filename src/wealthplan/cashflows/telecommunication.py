@@ -1,3 +1,8 @@
+import datetime as dt
+
+from wealthplan.cashflows.base import Cashflow
+
+
 class Telecommunication(Cashflow):
     """Represents monthly telecommunication payments (cell phone, internet)."""
 

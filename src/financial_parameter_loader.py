@@ -8,7 +8,6 @@ import yaml
 # ----------------------
 DATE_FORMAT: str = "%Y-%m-%d"
 
-KEY_CASHFLOWS: str = "cashflows"
 KEY_REGULAR: str = "regular_cashflows"
 KEY_INSURANCES: str = "insurances"
 KEY_PENSION_PLANS: str = "pension_plans"
@@ -54,7 +53,6 @@ from wealthplan.cashflows.insurances import Insurance
 from wealthplan.cashflows.pension_plan import PensionPlan
 from wealthplan.cashflows.telecommunication import Telecommunication
 
-
 # Mapping from YAML type string to Cashflow class
 REGULAR_CLASS_MAP: Dict[str, Type[Cashflow]] = {
     TYPE_SALARY: Salary,
@@ -68,7 +66,7 @@ REGULAR_CLASS_MAP: Dict[str, Type[Cashflow]] = {
 
 class FinancialParametersLoader:
     """
-    Loads financial simulation parameters from a YAML file and returns
+    Loads financial simulation parameters from a flattened YAML file and returns
     a list of instantiated Cashflow objects.
 
     The YAML path is constructed by combining an environment variable base path
@@ -92,7 +90,7 @@ class FinancialParametersLoader:
 
     def load(self) -> List[Cashflow]:
         """
-        Load parameters from YAML and instantiate Cashflow objects.
+        Load parameters from flattened YAML and instantiate Cashflow objects.
 
         Returns
         -------
@@ -108,16 +106,15 @@ class FinancialParametersLoader:
         # Regular cashflows
         # --------------------
         for key in REGULAR_KEYS:
-            if key in data.get(KEY_CASHFLOWS, {}):
-                params: Dict = data[KEY_CASHFLOWS][key].copy()
+            if key in data:
+                params: Dict = data[key].copy()
                 cls = REGULAR_CLASS_MAP[key]
 
                 # Handle optional retirement_date
                 retirement_date: dt.date = None
+
                 if KEY_RETIREMENT_DATE in params:
-                    retirement_date = dt.datetime.strptime(
-                        params[KEY_RETIREMENT_DATE], DATE_FORMAT
-                    ).date()
+                    retirement_date = params[KEY_RETIREMENT_DATE]
 
                 # Instantiate class with correct signature
                 if cls in [Salary, Pension]:
@@ -135,33 +132,33 @@ class FinancialParametersLoader:
         # --------------------
         # Insurances
         # --------------------
-        for ins_params in data[KEY_CASHFLOWS].get(KEY_INSURANCES, []):
+        for ins_params in data.get(KEY_INSURANCES, []):
             if KEY_NAME not in ins_params:
                 raise ValueError(f"Insurance entry missing '{KEY_NAME}': {ins_params}")
-            obj = Insurance(
+
+            insurance = Insurance(
                 amount=ins_params[KEY_AMOUNT],
-                frequency=ins_params[KEY_FREQUENCY],
                 name=ins_params[KEY_NAME],
+                frequency=ins_params[KEY_FREQUENCY],
             )
-            cashflows.append(obj)
+            cashflows.append(insurance)
 
         # --------------------
         # Pension plans
         # --------------------
-        for plan_params in data[KEY_CASHFLOWS].get(KEY_PENSION_PLANS, []):
+        for plan_params in data.get(KEY_PENSION_PLANS, []):
             if KEY_NAME not in plan_params:
                 raise ValueError(
                     f"Pension plan entry missing '{KEY_NAME}': {plan_params}"
                 )
-            retirement_date: dt.date = dt.datetime.strptime(
-                plan_params[KEY_RETIREMENT_DATE], DATE_FORMAT
-            ).date()
-            obj = PensionPlan(
+            retirement_date: dt.date = plan_params[KEY_RETIREMENT_DATE]
+
+            pension_plan = PensionPlan(
                 name=plan_params[KEY_NAME],
                 monthly_contribution=plan_params[KEY_MONTHLY_CONTRIBUTION],
                 monthly_payout=plan_params[KEY_MONTHLY_PAYOUT],
                 retirement_date=retirement_date,
             )
-            cashflows.append(obj)
+            cashflows.append(pension_plan)
 
         return cashflows
