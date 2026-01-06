@@ -34,4 +34,5 @@ class Pension(Cashflow):
         """
         if date >= self.retirement_date:
             return self.monthly_amount
+
         return 0.0

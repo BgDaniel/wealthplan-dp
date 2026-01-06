@@ -1,15 +1,13 @@
-import datetime as dt
-from src.wealthplan.cashflows.base import Cashflow
-
-class Rent(Cashflow):
-    """Represents monthly rent payments."""
+class Telecommunication(Cashflow):
+    """Represents monthly telecommunication payments (cell phone, internet)."""
 
     def __init__(self, monthly_amount: float) -> None:
         """
         Args:
-            monthly_amount (float): Rent paid every month.
+            monthly_amount (float): Telecommunication bill paid every month.
         """
         self.monthly_amount = monthly_amount
 
     def cashflow(self, delivery_date: dt.date) -> float:
+        # Always an outflow
         return -self.monthly_amount

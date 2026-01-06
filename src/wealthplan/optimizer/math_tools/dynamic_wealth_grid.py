@@ -17,7 +17,8 @@ class DynamicGridBuilder:
         c_step: float,
         cf: np.nd.array,
         alpha: float = 0.2,
-        max_grid_shift: float = 0.1,
+        beta:float = 0.005,
+        max_grid_shift: float = 0.3,
     ):
         """
         W0      : initial wealth
@@ -34,6 +35,7 @@ class DynamicGridBuilder:
 
         self.T = T
         self.alpha = alpha
+        self.beta = beta
         self.delta_w = delta_w
         self.w_max = w_max
         self.n_steps = n_steps
@@ -71,7 +73,7 @@ class DynamicGridBuilder:
 
         return self.grid
 
-    def extend_grid(self, simulations, lower_percentile=2, upper_percentile=2):
+    def extend_grid(self, simulations):
         """
         Extend or shrink grid boundaries based on Monte Carlo simulations.
 
@@ -81,6 +83,13 @@ class DynamicGridBuilder:
         """
         for t in range(1, self.n_steps - 1):
             sim_t = simulations[t]
+
+            sim_t = sim_t[sim_t != 0.0]
+
+            # If everything was zero, do nothing
+            if sim_t.size == 0:
+                continue
+
             grid_t = self.grid[t]
 
             lower_bound = grid_t[0]
@@ -90,30 +99,20 @@ class DynamicGridBuilder:
             pct_lower = np.mean(sim_t <= lower_bound)
             pct_upper = np.mean(sim_t >= upper_bound)
 
-            if pct_lower == 0.0 and pct_upper == 0.0:
-                # shrink wealth grid as no simuation touches the boundary
-                new_lower = np.min(sim_t) - self.delta_w
-                new_upper = np.max(sim_t) + self.delta_w
-                self.grid[t] = create_grid(new_lower, new_upper, self.delta_w)
-            elif pct_lower > 0.0 and pct_upper == 0.0:
-                new_lower = (
-                    np.min(sim_t) - pct_lower / 100.0 * self.max_grid_shift * self.w_max
-                )
-                new_upper = np.max(sim_t) + self.delta_w
-            elif pct_lower == 0.0 and pct_upper > 0.0:
-                new_lower = np.min(sim_t) - self.delta_w
-                new_upper = (
-                    np.max(sim_t) + pct_upper / 100.0 * self.max_grid_shift * self.w_max
-                )
-            elif pct_lower > 0.0 and pct_upper > 0.0:
-                new_lower = (
-                    np.min(sim_t) - pct_lower / 100.0 * self.max_grid_shift * self.w_max
-                )
-                new_upper = (
-                    np.max(sim_t) + pct_upper / 100.0 * self.max_grid_shift * self.w_max
-                )
+            if pct_lower <= self.beta and pct_upper <= self.beta:
+                continue
 
-            new_lower = np.max(0.0, new_lower)
+            if pct_lower > self.beta >= pct_upper:
+                new_lower = np.min(sim_t) - pct_lower * self.max_grid_shift * self.w_max
+                new_upper = upper_bound
+            elif pct_lower <= self.beta < pct_upper:
+                new_lower = lower_bound
+                new_upper = np.max(sim_t) + pct_upper * self.max_grid_shift * self.w_max
+            elif pct_lower > self.beta and pct_upper > self.beta:
+                new_lower = np.min(sim_t) - pct_lower * self.max_grid_shift * self.w_max
+                new_upper = np.max(sim_t) + pct_upper * self.max_grid_shift * self.w_max
+
+            new_lower = max(0.0, new_lower)
 
             self.grid[t] = create_grid(new_lower, new_upper, self.delta_w)
 

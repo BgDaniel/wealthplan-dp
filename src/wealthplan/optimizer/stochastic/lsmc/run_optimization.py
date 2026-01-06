@@ -19,8 +19,8 @@ def main():
     retirement_date = dt.date(2053, 10, 1)
 
     # Cashflows
-    salary = Salary(monthly_salary=6800, retirement_date=retirement_date)
-    rent = Rent(monthly_rent=1300)
+    salary = Salary(monthly_amount=6800, retirement_date=retirement_date)
+    rent = Rent(monthly_amount=1300)
     insurance = LifeInsurance(
         monthly_payment=130, payout=100000, payout_date=retirement_date
     )

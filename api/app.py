@@ -23,7 +23,7 @@ from .models import OptimizationInput
 from .schemas import OptimizationResult
 
 # Import your core wealth optimizer classes
-from src.wealthplan.cashflows.essential_expenses import EssentialExpenses
+from src.wealthplan.cashflows.groceries import EssentialExpenses
 from src.wealthplan.cashflows.salary import Salary
 from src.wealthplan.cashflows.rent import Rent
 from src.wealthplan.cashflows.pension import Pension
@@ -107,8 +107,8 @@ def optimize(params: OptimizationInput) -> OptimizationResult:
         # -----------------------
         # Create Cashflow Objects
         # -----------------------
-        salary = Salary(monthly_salary=params.salary, retirement_date=retirement_date)
-        rent = Rent(monthly_rent=params.rent)
+        salary = Salary(monthly_amount=params.salary, retirement_date=retirement_date)
+        rent = Rent(monthly_amount=params.rent)
         insurance = LifeInsurance(
             monthly_payment=100, payout=100000, end_date=retirement_date
         )

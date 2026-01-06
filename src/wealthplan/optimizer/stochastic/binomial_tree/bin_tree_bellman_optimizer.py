@@ -49,7 +49,7 @@ def compute_optimal_policy(
     cf_t,
     c_step,
     wealth_grid_next,
-    r
+    r,
 ):
     n_w = wealth_grid.shape[0]
 
@@ -190,7 +190,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             n_steps=self.n_months,
             c_step=self.c_step,
             L_t=self.opt_wealth_det,
-            cf=self.cf
+            cf=self.cf,
         )
 
         self.dynamic_wealth_grid = self.dynamic_grid_builder.build_initial_grid()
@@ -206,7 +206,9 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             self.u: float = math.exp(self.sigma * self.sqrt_dt)
             self.d: float = 1.0 / self.u
 
-            assert self.d < 1.0 + self.monthly_return < self.u, "Binomial tree model is not arbitrage free!"
+            assert (
+                self.d < 1.0 + self.monthly_return < self.u
+            ), "Binomial tree model is not arbitrage free!"
 
             self.p: float = (1.0 + self.monthly_return - self.d) / (self.u - self.d)
             self.q: float = 1.0 - self.p
@@ -334,9 +336,9 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         )
 
         # initialize arrays: shape (n_months, n_sims)
-        wealth_paths = np.zeros((self.n_months, self.n_sims))
-        consumption_paths = np.zeros((self.n_months, self.n_sims))
-        cashflow_paths = np.zeros((self.n_months, self.n_sims))
+        wealth_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
+        consumption_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
+        cashflow_paths = np.zeros((self.n_months, self.n_sims), dtype=np.float32)
 
         # initial month
         wealth_paths[0, :] = self.initial_wealth
@@ -481,6 +483,8 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             self._backward_induction()
             self._roll_forward()
 
+            self.plot()
+
     def solve(self) -> None:
         """
         Generic solver that dynamically calls the child class implementation
@@ -548,6 +552,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
         # --- Pick sample simulation ---
         if sample_sim is None:
+            np.random.seed(self.seed)
             sample_sim = np.random.randint(self.n_sims)
 
         months = self.months
