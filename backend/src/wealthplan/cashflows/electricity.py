@@ -1,5 +1,5 @@
 import datetime as dt
-from src.wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 
 class Electricity(CashflowBase):

@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import matplotlib.pyplot as plt
 
-from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
+from wealthplan.optimizer.stochastic import GBM
 
 
 class TestGBM(unittest.TestCase):

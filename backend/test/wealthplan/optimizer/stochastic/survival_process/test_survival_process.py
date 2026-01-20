@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 import matplotlib.pyplot as plt
 
-from wealthplan.optimizer.stochastic.survival_process.survival_process import SurvivalProcess
+from wealthplan.optimizer.stochastic import SurvivalProcess
 
 
 class TestSurvivalProcess(unittest.TestCase):

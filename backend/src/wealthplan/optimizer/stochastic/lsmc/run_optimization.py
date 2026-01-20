@@ -1,9 +1,9 @@
 import datetime as dt
 
-from src.wealthplan.cashflows.salary import Salary
-from src.wealthplan.cashflows.rent import Rent
-from src.wealthplan.cashflows.pension import Pension
-from src.wealthplan.cashflows.life_insurance import LifeInsurance
+from wealthplan.cashflows.salary import Salary
+from wealthplan.cashflows.rent import Rent
+from wealthplan.cashflows.pension import Pension
+from wealthplan import LifeInsurance
 from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import (
     LSMCBellmanOptimizer,
 )

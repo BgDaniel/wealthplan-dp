@@ -23,13 +23,13 @@ from .models import OptimizationInput
 from .schemas import OptimizationResult
 
 # Import your core wealth optimizer classes
-from src.wealthplan.cashflows.groceries import EssentialExpenses
-from src.wealthplan.cashflows.salary import Salary
-from src.wealthplan.cashflows.rent import Rent
-from src.wealthplan.cashflows.pension import Pension
-from src.wealthplan.cashflows.life_insurance import LifeInsurance
-from src.wealthplan.wealth import Wealth
-from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
+from wealthplan.cashflows.groceries import EssentialExpenses
+from wealthplan.cashflows import Salary
+from wealthplan.cashflows.rent import Rent
+from wealthplan.cashflows.pension import Pension
+from wealthplan import LifeInsurance
+from wealthplan import Wealth
+from wealthplan.optimizer import (
     BellmanOptimizer,
 )
 

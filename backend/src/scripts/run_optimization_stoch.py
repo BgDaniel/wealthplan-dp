@@ -1,8 +1,8 @@
 import datetime as dt
 from typing import List
 
-from parameter_loader import FinancialParametersLoader
-from src.wealthplan.cashflows.cashflow_base import CashflowBase
+from parameterization.parameter_loader import FinancialParametersLoader
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.stochastic.binomial_tree.bin_tree_bellman_optimizer import (
     BinTreeBellmanOptimizer,

@@ -3,7 +3,7 @@
 import datetime as dt
 from typing import Literal
 
-from src.wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.cashflows.cashflow_base import CashflowBase
 
 
 class Insurance(CashflowBase):

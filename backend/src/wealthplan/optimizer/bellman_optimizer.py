@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from src.wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cache.result_cache import ResultCache
 from wealthplan.optimizer.math_tools.penality_functions import (
     square_penality,

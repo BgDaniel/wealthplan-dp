@@ -1,4 +1,4 @@
-from parameter_loader import ParametersLoader
+from parameterization.parameter_loader import ParametersLoader
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
 )
