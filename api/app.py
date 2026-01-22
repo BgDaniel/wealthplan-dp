@@ -4,7 +4,7 @@ WealthPlan Optimizer API
 
 This module exposes a REST API to run the Bellman-based wealth optimization model.
 Clients can send input parameters as JSON, and the API returns optimized
-wealth, consumption, and cashflow paths, including data suitable for plotting.
+wealth, consumption, and cashflow paths, including params suitable for plotting.
 
 Endpoints:
 - GET /            : Health check

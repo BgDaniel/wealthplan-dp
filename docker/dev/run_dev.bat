@@ -1,0 +1,1 @@
+docker run --rm wealthplan-dp-dev --params-file my_custom_params.yaml

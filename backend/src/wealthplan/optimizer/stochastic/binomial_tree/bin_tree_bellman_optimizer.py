@@ -107,7 +107,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         c_step: float = 500.0,
         n_sims: int = 2500,
         seed: int = 42,
-        save: bool = True,
+        use_cache: bool = True,
         stochastic: bool = True,
         use_dynamic_wealth_grid: bool = False,
         max_grid_iteration: int = 100,
@@ -129,7 +129,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
             w_max=w_max,
             w_step=w_step,
             c_step=c_step,
-            save=save,
+            use_cache=use_cache,
         )
 
         self.sigma = sigma
@@ -176,7 +176,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
                 w_max=self.w_max,
                 w_step=self.w_step,
                 c_step=self.c_step,
-                save=self.save,
+                use_cache=self.use_cache,
             )
         )
 

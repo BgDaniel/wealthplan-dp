@@ -8,11 +8,11 @@ from numba import prange, njit
 
 from tqdm import tqdm
 
-from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
+from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.bellman_optimizer import (
-    BellmanOptimizer, create_grid,
+    BellmanOptimizer, create_grid, OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY, CASHFLOW_KEY,
 )
 from wealthplan.optimizer.math_tools.penality_functions import (
     PenalityFunction,
@@ -76,7 +76,7 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         w_max: float = 750_000.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
-        save: bool = True,
+        use_cache: bool = True,
     ) -> None:
         """
         Initialize the deterministic Bellman optimizer.
@@ -97,7 +97,13 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             w_max=w_max,
             w_step=w_step,
             c_step=c_step,
-            save=save,
+            use_cache=use_cache,
+        )
+
+        self.opt_results = pd.DataFrame(
+            0,
+            index=self.months,
+            columns=[OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY]
         )
 
     def _backward_induction(self) -> None:
@@ -118,8 +124,6 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
 
             # Check cache
             if self.cache.has(date_t):
-                logger.info("Cache hit for %s", date_t)
-
                 cached_data = self.cache.load_date(date_t)
 
                 v_t = cached_data[VALUE_FUNCTION_KEY]
@@ -200,9 +204,9 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
             cashflow_path[t] = self.cf[t]
 
         # Save as pandas Series indexed by months
-        self.opt_wealth = pd.Series(wealth_path, index=self.months)
-        self.opt_consumption = pd.Series(consumption_path, index=self.months)
-        self.monthly_cashflows = pd.Series(cashflow_path, index=self.months)
+        self.opt_results[OPTIMAL_WEALTH_KEY] = pd.Series(wealth_path, index=self.months)
+        self.opt_results[OPTIMAL_CONS_KEY] = pd.Series(consumption_path, index=self.months)
+        self.opt_results[CASHFLOW_KEY] = pd.Series(cashflow_path, index=self.months)
 
     def plot(
         self,
@@ -238,14 +242,14 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
         -------
         None
         """
-        if self.opt_wealth.empty:
+        if self.opt_results.empty:
             raise RuntimeError("No solution available — call solve() first.")
 
         months = self.months
 
-        cons: np.ndarray = self.opt_consumption.values
-        wealth: np.ndarray = self.opt_wealth.values
-        inv: np.ndarray = self.cf - cons
+        cons: np.ndarray = self.opt_results[OPTIMAL_CONS_KEY].values
+        wealth: np.ndarray = self.opt_results[OPTIMAL_WEALTH_KEY].values
+        inv: np.ndarray = self.opt_results[CASHFLOW_KEY] - cons
 
         # ============================
         # Plotting

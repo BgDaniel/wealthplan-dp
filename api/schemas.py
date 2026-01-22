@@ -5,7 +5,7 @@ import datetime as dt
 class OptimizationResult(BaseModel):
     """
     Output structure for optimization results, including summary statistics
-    and time series data for frontend visualization.
+    and time series params for frontend visualization.
     """
 
     success: bool = Field(..., description="Whether the optimization completed successfully")
@@ -13,7 +13,7 @@ class OptimizationResult(BaseModel):
     summary: Dict[str, Any] = Field(default_factory=dict, description="Key numerical results summary")
     raw: Optional[Any] = Field(None, description="Raw solver output (optional)")
 
-    # --- Plot data ---
+    # --- Plot params ---
     wealth_dates: Optional[List[dt.date]] = Field(
         None, description="List of dates for optimized wealth timeline"
     )

@@ -7,7 +7,7 @@ import pandas as pd
 from numba import njit
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
-from wealthplan.cache.result_cache import ResultCache
+from result_cache.result_cache import ResultCache
 from wealthplan.optimizer.math_tools.penality_functions import (
     square_penality,
     PenalityFunction,
@@ -19,6 +19,12 @@ from wealthplan.optimizer.math_tools.utility_functions import UtilityFunction
 
 
 logger = logging.getLogger(__name__)
+
+
+OPTIMAL_POLICY_KEY = "optimal_policy"
+OPTIMAL_WEALTH_KEY = "optimal_wealth"
+OPTIMAL_CONS_KEY = "optimal_consumption"
+CASHFLOW_KEY = "cashflow"
 
 
 @njit
@@ -46,7 +52,7 @@ def create_grid(min_val: float, max_val: float, delta: float):
 # ---------------------------
 class BellmanOptimizer(ABC):
     """
-    Base class that stores problem data and provides a common interface for
+    Base class that stores problem params and provides a common interface for
     concrete solver implementations.
 
     Subclasses must implement `solve()` to populate:
@@ -73,10 +79,10 @@ class BellmanOptimizer(ABC):
         w_max: float = 750000.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
-        save: bool = True,
+        use_cache: bool = True,
     ) -> None:
         """
-        Initialize common problem data.
+        Initialize common problem params.
 
         Args:
             start_date: simulation start (inclusive).
@@ -89,7 +95,7 @@ class BellmanOptimizer(ABC):
             instant_utility: u(c) function (defaults to log utility).
             terminal_penalty: function penalizing terminal wealth (default -w^2).
             dt: time step in years (default monthly = 1/12).
-            save: whether to allow caching (Bellman uses it).
+            use_cache: whether to allow caching (Bellman uses it).
         """
         self.run_id: str = run_id
         self.start_date: dt.date = start_date
@@ -107,7 +113,7 @@ class BellmanOptimizer(ABC):
         self.w_max: float = w_max
         self.w_step: float = w_step
         self.c_step: float = c_step
-        self.save: bool = save
+        self.use_cache: bool = use_cache
 
         # Derived / prepared attributes
         self.months: List[dt.date] = []
@@ -129,7 +135,7 @@ class BellmanOptimizer(ABC):
             )
         )
 
-        self.cache = ResultCache(enabled=save, run_id=run_id)
+        self.cache = ResultCache(enabled=use_cache, run_id=run_id)
 
         self.value_function: Dict[dt.date, np.ndarray()] = {}
         self.policy: Dict[dt.date, np.ndarray()] = {}

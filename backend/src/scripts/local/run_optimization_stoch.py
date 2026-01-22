@@ -1,7 +1,7 @@
 import datetime as dt
 from typing import List
 
-from parameterization.parameter_loader import FinancialParametersLoader
+from params.parameter_loader import FinancialParametersLoader
 from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.stochastic.binomial_tree.bin_tree_bellman_optimizer import (
@@ -79,7 +79,7 @@ def main() -> None:
         w_step=400.0,
         c_step=400.0,
         use_dynamic_wealth_grid=False,
-        save=save,
+        use_cache=save,
     )
 
     # ----------------------------
