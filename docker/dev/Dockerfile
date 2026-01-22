@@ -10,7 +10,8 @@ RUN echo "Base image python:3.14-slim selected"
 # 1️⃣ Set environment variables for DEV S3 buckets and prefixes
 ENV S3_BUCKET_ENV="wealthplan-dp-dev" \
     S3_PARAMS_PREFIX_ENV="params" \
-    S3_OUTPUT_PREFIX_ENV="output"
+    S3_OUTPUT_PREFIX_ENV="output" \
+    TMP_FOLDER_ENV="/app/tmp"
 
 # 2️⃣ Set working directory inside the container
 WORKDIR /app

@@ -10,11 +10,11 @@ from io_handler.io_handler_base import AbstractIOHandler
 
 
 # Environment variables
-S3_BUCKET_ENV = "S3_BUCKET"             # Single bucket for both params and results
-S3_PARAMS_PREFIX_ENV = "S3_PARAMS_PREFIX"   # e.g., "params"
-S3_OUTPUT_PREFIX_ENV = "S3_OUTPUT_PREFIX"   # e.g., "output"
-PARAMS_FOLDER_ENV = "PARAMS_FOLDER"        # Local folder for uploading params
-TMP_FOLDER_ENV = "TMP_FOLDER"              # Temporary folder for downloads/uploads
+S3_BUCKET_ENV = "S3_BUCKET_ENV"             # Single bucket for both params and results
+S3_PARAMS_PREFIX_ENV = "S3_PARAMS_PREFIX_ENV"   # e.g., "params"
+S3_OUTPUT_PREFIX_ENV = "S3_OUTPUT_PREFIX_ENV"   # e.g., "output"
+PARAMS_FOLDER_ENV = "PARAMS_FOLDER_ENV"        # Local folder for uploading params
+TMP_FOLDER_ENV = "TMP_FOLDER_ENV"              # Temporary folder for downloads/uploads
 
 
 # Configure logging
