@@ -46,7 +46,7 @@ KEY_INSURANCE = "insurances"
 KEY_TECHNICAL = "technical"
 KEY_TOTAL_PENSION = "total_pension"
 
-KEY_RUN_ID = "run_id"
+KEY_RUN_CONFIG_ID = "run_config_id"
 KEY_CASHFLOWS = "cashflows"
 KEY_START_DATE = "start_date"
 KEY_END_DATE = "end_date"
@@ -65,6 +65,7 @@ KEY_MONTHLY_PAYOUT_BRUTTO = "monthly_payout_brutto"
 KEY_TAXABLE_EARNINGS_SHARE = "taxable_earnings_share"
 KEY_CONTRIBUTION_GROWTH_RATE = "contribution_growth_rate"
 KEY_START_DATE_PLAN = "start_date"
+KEY_RUN_TASK_ID = "run_task_id"
 
 
 class ConfigMapper:
@@ -103,7 +104,7 @@ class ConfigMapper:
         cashflows.extend(ConfigMapper._load_total_pension(data))
 
         return {
-            KEY_RUN_ID: sim_params.get(KEY_RUN_ID, "lifecycle_sim"),
+            KEY_RUN_CONFIG_ID: sim_params[KEY_RUN_CONFIG_ID],
             KEY_START_DATE: sim_params[KEY_START_DATE],
             KEY_END_DATE: sim_params[KEY_END_DATE],
             KEY_RETIREMENT_DATE: sim_params[KEY_RETIREMENT_DATE],
@@ -111,10 +112,10 @@ class ConfigMapper:
             KEY_YEARLY_RETURN: sim_params[KEY_YEARLY_RETURN],
             KEY_BETA: sim_params[KEY_BETA],
             KEY_CASHFLOWS: cashflows,
-            KEY_W_MAX: technical_params.get(KEY_W_MAX, 750_000.0),
-            KEY_W_STEP: technical_params.get(KEY_W_STEP, 50.0),
-            KEY_C_STEP: technical_params.get(KEY_C_STEP, 50.0),
-            KEY_USE_CACHE: technical_params.get(KEY_USE_CACHE, True),
+            KEY_W_MAX: technical_params[KEY_W_MAX],
+            KEY_W_STEP: technical_params[KEY_W_STEP],
+            KEY_C_STEP: technical_params[KEY_C_STEP],
+            KEY_USE_CACHE: technical_params[KEY_USE_CACHE]
         }
 
     # ----------------------

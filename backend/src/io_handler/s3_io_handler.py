@@ -11,10 +11,10 @@ from io_handler.io_handler_base import AbstractIOHandler
 
 # Environment variables
 S3_BUCKET_ENV = "S3_BUCKET_ENV"             # Single bucket for both params and results
-S3_PARAMS_PREFIX_ENV = "S3_PARAMS_PREFIX_ENV"   # e.g., "params"
-S3_OUTPUT_PREFIX_ENV = "S3_OUTPUT_PREFIX_ENV"   # e.g., "output"
-PARAMS_FOLDER_ENV = "PARAMS_FOLDER_ENV"        # Local folder for uploading params
-TMP_FOLDER_ENV = "TMP_FOLDER_ENV"              # Temporary folder for downloads/uploads
+S3_PARAMS_PREFIX_ENV = "S3_PARAMS_PREFIX"   # e.g., "params"
+S3_OUTPUT_PREFIX_ENV = "S3_OUTPUT_PREFIX"   # e.g., "output"
+PARAMS_FOLDER_ENV = "PARAMS_FOLDER"         # Local folder for uploading params
+TMP_FOLDER_ENV = "TMP_FOLDER"               # Temporary folder for downloads/uploads
 
 
 # Configure logging
@@ -173,7 +173,7 @@ class S3IOHandler(AbstractIOHandler):
         self.s3.upload_file(str(local_file), self.bucket, s3_key)
         logger.info(f"Successfully uploaded parameters → s3://{self.bucket}/{s3_key}")
 
-    def save_results(self, results: pd.DataFrame, run_id: str) -> None:
+    def save_results(self, results: pd.DataFrame, run_id: str, run_task_id: str = "") -> None:
         """
         Save a Pandas DataFrame as CSV to S3 under output prefix using run_id.
 
@@ -183,9 +183,16 @@ class S3IOHandler(AbstractIOHandler):
             DataFrame to upload.
         run_id : str
             Identifier for the run; used as folder name in S3.
+        run_task_id: str
+            Optional run task ID for optimization run. (default empty).
         """
         filename: str = "optimization_results.csv"
-        s3_key: str = f"{self.output_prefix}/{run_id}/{filename}"
+
+        if run_task_id != "":
+            s3_key: str = f"{self.output_prefix}/{run_id}/{run_task_id}/{filename}"
+        else:
+            s3_key: str = f"{self.output_prefix}/{run_id}/{filename}"
+
         tmp_file: Path = self._tmp_file_path(filename)
 
         logger.info(f"Writing results to temporary file '{tmp_file}'")
@@ -212,9 +219,6 @@ if __name__ == "__main__":
 
     param_file_name = "lifecycle_params.yaml"
     handler.upload_params(param_file_name)
-
-    param_file_name_no_cache = "lifecycle_params_no_cache.yaml"
-    handler.upload_params(param_file_name_no_cache)
 
     yaml_data = handler.load_params()
     print(yaml_data)

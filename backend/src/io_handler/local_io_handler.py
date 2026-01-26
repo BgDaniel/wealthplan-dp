@@ -72,7 +72,7 @@ class LocalIOHandler(AbstractIOHandler):
 
         return yaml_data
 
-    def save_results(self, results: pd.DataFrame, run_id: str) -> None:
+    def save_results(self, results: pd.DataFrame, run_config_id: str, run_task_id: str = "") -> None:
         """
         Save a Pandas DataFrame as CSV in the local output directory under a run-specific subfolder.
 
@@ -80,10 +80,16 @@ class LocalIOHandler(AbstractIOHandler):
         ----------
         results : pd.DataFrame
             DataFrame containing results.
-        run_id : str
+        run_config_id : str
             Run identifier; creates a subfolder for this run.
+        run_task_id: str
+            Optional run task ID for optimization run. (default empty).
         """
-        output_dir = self.base_output_dir / run_id
+        output_dir = self.base_output_dir / run_config_id
+
+        if run_task_id != "":
+            output_dir /= run_task_id
+
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Use DataFrame name or fallback to "results.csv"

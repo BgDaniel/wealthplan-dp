@@ -1,6 +1,12 @@
 import os
+import uuid
 
-from io_handler.s3_io_handler import S3IOHandler, S3_BUCKET_ENV, S3_PARAMS_PREFIX_ENV, S3_OUTPUT_PREFIX_ENV
+from io_handler.s3_io_handler import (
+    S3IOHandler,
+    S3_BUCKET_ENV,
+    S3_PARAMS_PREFIX_ENV,
+    S3_OUTPUT_PREFIX_ENV,
+)
 from config.config_mapper import ConfigMapper
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
@@ -9,7 +15,8 @@ from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
 
 def main(
     params_file_name: str = "lifecycle_params.yaml",
-    plot: bool = False
+    run_task_id: str = "",
+    plot: bool = False,
 ) -> None:
     """
     Run a deterministic Bellman optimizer for a lifecycle consumption–wealth
@@ -17,6 +24,7 @@ def main(
 
     Args:
         params_file_name: Name of the YAML file to load from the local parameters path.
+        run_task_id (str): Optional task ID to tag outputs. Defaults to empty string.
         plot: If True, will plot the results after solving.
     """
     # ----------------------------
@@ -37,7 +45,11 @@ def main(
 
     deterministic_optimizer.solve()
 
-    s3_handler.save_results(results=deterministic_optimizer.opt_results, run_id=deterministic_optimizer.run_id)
+    s3_handler.save_results(
+        results=deterministic_optimizer.opt_results,
+        run_id=deterministic_optimizer.run_config_id,
+        run_task_id=run_task_id,
+    )
 
     if plot:
         deterministic_optimizer.plot()
@@ -48,4 +60,6 @@ if __name__ == "__main__":
     os.environ[S3_PARAMS_PREFIX_ENV] = "params"
     os.environ[S3_OUTPUT_PREFIX_ENV] = "output"
 
-    main(plot=False)
+    run_task_id = uuid.uuid4().hex
+
+    main(params_file_name='lifecycle_params.yaml', run_task_id=run_task_id, plot=True)

@@ -34,7 +34,7 @@ class AbstractIOHandler(ABC):
         pass
 
     @abstractmethod
-    def save_results(self, results: pd.DataFrame, run_id: str) -> None:
+    def save_results(self, results: pd.DataFrame, run_id: str, run_task_id: str = "") -> None:
         """
         Save a Pandas Series or DataFrame to the storage backend.
 
@@ -44,5 +44,7 @@ class AbstractIOHandler(ABC):
             The Pandas object containing results (e.g., wealth path, consumption).
         run_id : str
             Run identifier; can be used to organize results by run.
+        run_task_id: str
+            Optional run task ID for optimization run. (default empty).
         """
         pass

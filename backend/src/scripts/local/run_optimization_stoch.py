@@ -65,7 +65,7 @@ def main() -> None:
     # Instantiate Binomial Tree Bellman optimizer
     # ----------------------------
     bin_tree_optimizer_dynamic: BinTreeBellmanOptimizer = BinTreeBellmanOptimizer(
-        run_id="test_bin_tree_optimizer_dynamic",
+        run_config_id="test_bin_tree_optimizer_dynamic",
         start_date=start_date,
         end_date=end_date,
         retirement_date=retirement_date,

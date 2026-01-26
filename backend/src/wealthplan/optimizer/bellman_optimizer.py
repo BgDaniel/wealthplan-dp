@@ -65,7 +65,7 @@ class BellmanOptimizer(ABC):
 
     def __init__(
         self,
-        run_id: str,
+        run_config_id: str,
         start_date: dt.date,
         end_date: dt.date,
         retirement_date: dt.date,
@@ -79,7 +79,7 @@ class BellmanOptimizer(ABC):
         w_max: float = 750000.0,
         w_step: float = 50.0,
         c_step: float = 50.0,
-        use_cache: bool = True,
+        use_cache: bool = True
     ) -> None:
         """
         Initialize common problem params.
@@ -97,7 +97,7 @@ class BellmanOptimizer(ABC):
             dt: time step in years (default monthly = 1/12).
             use_cache: whether to allow caching (Bellman uses it).
         """
-        self.run_id: str = run_id
+        self.run_config_id: str = run_config_id
         self.start_date: dt.date = start_date
         self.end_date: dt.date = end_date
         self.retirement_date = retirement_date
@@ -135,7 +135,7 @@ class BellmanOptimizer(ABC):
             )
         )
 
-        self.cache = ResultCache(enabled=use_cache, run_id=run_id)
+        self.cache = ResultCache(enabled=use_cache, run_id=run_config_id)
 
         self.value_function: Dict[dt.date, np.ndarray()] = {}
         self.policy: Dict[dt.date, np.ndarray()] = {}

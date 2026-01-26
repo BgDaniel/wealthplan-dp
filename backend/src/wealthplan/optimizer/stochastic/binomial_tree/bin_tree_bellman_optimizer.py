@@ -90,7 +90,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
 
     def __init__(
         self,
-        run_id: str,
+        run_config_id: str,
         start_date: dt.date,
         end_date: dt.date,
         retirement_date: dt.date,
@@ -117,7 +117,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
         """
         # ---- Call base constructor ----
         super().__init__(
-            run_id=run_id,
+            run_config_id=run_config_id,
             start_date=start_date,
             end_date=end_date,
             retirement_date=retirement_date,
@@ -166,7 +166,7 @@ class BinTreeBellmanOptimizer(BellmanOptimizer):
     def _roll_out_wealth_grid(self) -> None:
         deterministic_optimizer: DeterministicBellmanOptimizer = (
             DeterministicBellmanOptimizer(
-                run_id=self.run_id + "_det",
+                run_config_id=self.run_config_id + "_det",
                 start_date=self.start_date,
                 end_date=self.end_date,
                 retirement_date=self.retirement_date,

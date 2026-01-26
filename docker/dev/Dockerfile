@@ -11,7 +11,9 @@ RUN echo "Base image python:3.14-slim selected"
 ENV S3_BUCKET_ENV="wealthplan-dp-dev" \
     S3_PARAMS_PREFIX_ENV="params" \
     S3_OUTPUT_PREFIX_ENV="output" \
-    TMP_FOLDER_ENV="/app/tmp"
+    TMP_FOLDER_ENV="/app/tmp" \
+    PARAMS_FILE="lifecycle_params.yaml" \
+    RUN_TASK_ID=""
 
 # 2️⃣ Set working directory inside the container
 WORKDIR /app
@@ -40,4 +42,4 @@ ENV PYTHONPATH=/app/src
 # 🔟 Default command to run the optimizer script
 # Allow passing params_file_name as an argument dynamically when running container
 ENTRYPOINT ["python3", "src/scripts/run_optimizer.py"]
-CMD ["--params-file", "lifecycle_params.yaml"]
+CMD []

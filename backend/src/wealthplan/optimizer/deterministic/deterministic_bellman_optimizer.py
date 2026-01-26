@@ -60,45 +60,8 @@ class DeterministicBellmanOptimizer(BellmanOptimizer):
     """
     Deterministic Bellman (backward induction) optimizer.
     """
-
-    def __init__(
-        self,
-        run_id: str,
-        start_date: dt.date,
-        end_date: dt.date,
-        retirement_date: dt.date,
-        initial_wealth: float,
-        yearly_return: float,
-        beta: float,
-        cashflows: List[CashflowBase],
-        instant_utility: UtilityFunction = crra_utility,
-        terminal_penalty: PenalityFunction = square_penality,
-        w_max: float = 750_000.0,
-        w_step: float = 50.0,
-        c_step: float = 50.0,
-        use_cache: bool = True,
-    ) -> None:
-        """
-        Initialize the deterministic Bellman optimizer.
-
-        All parameters are forwarded unchanged to BellmanOptimizer.
-        """
-        super().__init__(
-            run_id=run_id,
-            start_date=start_date,
-            end_date=end_date,
-            retirement_date=retirement_date,
-            initial_wealth=initial_wealth,
-            yearly_return=yearly_return,
-            beta=beta,
-            cashflows=cashflows,
-            instant_utility=instant_utility,
-            terminal_penalty=terminal_penalty,
-            w_max=w_max,
-            w_step=w_step,
-            c_step=c_step,
-            use_cache=use_cache,
-        )
+    def __init__(self, **params):
+        super().__init__(**params)
 
         self.opt_results = pd.DataFrame(
             0,
