@@ -8,7 +8,7 @@ class SimplePolicyNetwork(nn.Module):
     Flexible feedforward neural network for continuous policy.
 
     Fixed:
-    - Input dimension: 4 (savings, stocks, normalized time, alive flag)
+    - Input dimension: 3 (savings_fraction, wealth_scaled, normalized time)
     - Output dimension: 3 (consumption fraction, savings→stocks fraction, stocks→savings fraction)
 
     Flexible:
@@ -18,8 +18,8 @@ class SimplePolicyNetwork(nn.Module):
     - Dropout
     """
 
-    INPUT_DIM = 4  # [savings_frac, stocks_frac, log_total_wealth, t_norm]
-    OUTPUT_DIM = 3  # fixed
+    INPUT_DIM = 3  # [savings_frac, stocks_frac, log_total_wealth, t_norm]
+    OUTPUT_DIM = 2  # fixed
 
     def __init__(
         self,

@@ -13,6 +13,8 @@ from wealthplan.optimizer.math_tools.utility_functions import (
 KEY_NEURAL_AGENT: str = "neural_agent"
 KEY_LR: str = "lr"
 KEY_DEVICE: str = "device"
+KEY_SAVING_MIN: str = "saving_min"
+KEY_MAX_WEALTH_FACTOR: str = "max_wealth_factor"
 
 # ----------------------
 # Instant utility keys
@@ -60,6 +62,9 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
         lr: float = neural_cfg[KEY_LR]
         device: str = neural_cfg[KEY_DEVICE]
 
+        saving_min: float = neural_cfg[KEY_SAVING_MIN]
+        max_wealth_factor: float = neural_cfg[KEY_MAX_WEALTH_FACTOR]
+
         # ----------------------
         # Instant utility function
         # ----------------------
@@ -88,6 +93,8 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
                 KEY_LR: lr,
                 KEY_DEVICE: device,
                 KEY_INSTANT_UTILITY: instant_utility,
+                KEY_SAVING_MIN: saving_min,
+                KEY_MAX_WEALTH_FACTOR: max_wealth_factor
             }
         )
 
