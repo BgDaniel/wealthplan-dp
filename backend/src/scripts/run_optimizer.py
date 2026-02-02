@@ -1,7 +1,7 @@
 import os
 
+from config.deterministic.bellman_config_mapper import BellmanConfigMapper
 from io_handler.s3_io_handler import S3IOHandler
-from config.config_mapper import ConfigMapper, KEY_RUN_TASK_ID
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
 )
@@ -25,7 +25,7 @@ def main(params_file_name: str, run_task_id: str = "") -> None:
     s3_handler = S3IOHandler(params_file_name=params_file_name)
 
     yaml_dict = s3_handler.load_params()
-    params = ConfigMapper.map_yaml_to_params(yaml_dict)
+    params = BellmanConfigMapper.map_yaml_to_params(yaml_dict)
 
     optimizer = DeterministicBellmanOptimizer(**params)
     optimizer.solve()

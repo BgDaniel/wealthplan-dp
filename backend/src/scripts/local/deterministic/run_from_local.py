@@ -1,14 +1,14 @@
 import uuid
 
+from config.deterministic.bellman_config_mapper import BellmanConfigMapper
 from io_handler.local_io_handler import LocalIOHandler
-from config.config_mapper import ConfigMapper, KEY_RUN_TASK_ID
 from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
     DeterministicBellmanOptimizer,
 )
 
 
 def main(
-    params_file_name: str = "lifecycle_params.yaml",
+    params_file_name: str = "deterministic/lifecycle_params.yaml",
     run_task_id: str = "",
     plot: bool = True
 ) -> None:
@@ -28,7 +28,7 @@ def main(
 
     yaml_dict = io_handler.load_params()
 
-    params = ConfigMapper.map_yaml_to_params(yaml_dict)
+    params = BellmanConfigMapper.map_yaml_to_params(yaml_dict)
 
     # ----------------------------
     # Run deterministic Bellman solver
@@ -50,4 +50,4 @@ def main(
 if __name__ == "__main__":
     run_task_id = uuid.uuid4().hex
 
-    main(params_file_name='lifecycle_params.yaml', run_task_id=run_task_id, plot=True)
+    main(params_file_name='deterministic/lifecycle_params.yaml', run_task_id=run_task_id, plot=True)

@@ -16,7 +16,7 @@ class SurvivalProcess:
         0 if dead
     """
 
-    def __init__(self, b: float, c: float, age: float = 0.0, seed: Optional[int] = None):
+    def __init__(self, b: float, c: float, age: float = 0.0):
         """
         Initialize Gompertz survival process.
 
@@ -28,8 +28,6 @@ class SurvivalProcess:
             Aging rate (year^-1)
         age : float
             Current age at t=0 (years)
-        seed : Optional[int]
-            Random seed
         """
         if b < 0 or c < 0:
             raise ValueError("b and c must be positive for realistic mortality.")
@@ -37,11 +35,8 @@ class SurvivalProcess:
         self.b = b
         self.c = c
         self.age = age
-        self.seed = seed
-        if seed is not None:
-            np.random.seed(seed)
 
-    def simulate(self, n_sims: int, dates: List[dt.date]) -> np.ndarray:
+    def simulate(self, n_sims: int, dates: List[dt.date], seed: int) -> np.ndarray:
         """
         Simulate survival indicator paths.
 
@@ -51,6 +46,8 @@ class SurvivalProcess:
             Number of paths
         dates : List[datetime.date]
             Ordered time grid
+        seed : int
+            Random seed
 
         Returns
         -------
@@ -70,6 +67,8 @@ class SurvivalProcess:
         # Generate death times using inverse transform sampling
         # CDF: F(t) = 1 - exp(- (b/c) * (exp(c*(t+age)) - exp(c*age)))
         # Inverse CDF: t = (1/c) * log( - (c/b) * log(U) + exp(c*age)) - age
+        np.random.seed(seed)
+
         U = np.random.uniform(size=n_sims)
         death_times = (1.0 / self.c) * np.log(- (self.c / self.b) * np.log(U) + np.exp(self.c * self.age)) - self.age
 

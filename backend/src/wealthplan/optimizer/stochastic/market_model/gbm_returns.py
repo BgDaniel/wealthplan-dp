@@ -18,7 +18,7 @@ class GBM:
         - sigma is the volatility
     """
 
-    def __init__(self, mu: float, sigma: float, seed: Optional[int] = None) -> None:
+    def __init__(self, mu: float, sigma: float) -> None:
         """
         Initialize the GBM model.
 
@@ -28,20 +28,15 @@ class GBM:
             Drift parameter.
         sigma : float
             Volatility parameter.
-        seed : Optional[int], default=None
-            Random seed for reproducibility.
         """
         self.mu = mu
         self.sigma = sigma
-        self.seed = seed
-
-        if seed is not None:
-            np.random.seed(seed)
 
     def simulate(
         self,
         n_sims: int,
         dates: List[dt.date],
+        seed: int,
         s0: float = 1.0,
     ) -> np.ndarray:
         """
@@ -53,6 +48,8 @@ class GBM:
             Number of simulated paths.
         dates : List[datetime.date]
             Ordered list of dates defining the time grid.
+        seed : int
+            Random seed for reproducibility.
         s0 : float, default=1.0
             Initial value of the process.
 
@@ -73,6 +70,8 @@ class GBM:
         n_steps = len(dates)
         paths = np.zeros((n_sims, n_steps))
         paths[:, 0] = s0
+
+        np.random.seed(seed)
 
         for t in range(1, n_steps):
             z = np.random.normal(size=n_sims)

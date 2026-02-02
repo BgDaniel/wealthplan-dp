@@ -1,7 +1,9 @@
 import datetime as dt
+import uuid
 from typing import List
 
-from params.parameter_loader import FinancialParametersLoader
+from config.stochastic.stochastic_config_mapper import LSMCConfigMapper, StochasticConfigMapper
+from io_handler.local_io_handler import LocalIOHandler
 from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.stochastic.binomial_tree.bin_tree_bellman_optimizer import (
@@ -10,6 +12,46 @@ from wealthplan.optimizer.stochastic.binomial_tree.bin_tree_bellman_optimizer im
 from wealthplan.optimizer.stochastic.survival_process.survival_model import (
     SurvivalModel,
 )
+
+
+def main(
+    params_file_name: str = "deterministic/lifecycle_params.yaml",
+    run_task_id: str = "",
+    plot: bool = True
+) -> None:
+    """
+    Run a deterministic Bellman optimizer for a lifecycle consumption–wealth
+    planning problem using parameters loaded from a local YAML file.
+
+    Args:
+        params_file_name: Name of the YAML file to load from the local parameters path.
+        run_task_id (str): Optional task ID to tag outputs. Defaults to empty string.
+        plot: If True, will plot the results after solving.
+    """
+    # ----------------------------
+    # Load configuration from local YAML
+    # ----------------------------
+    io_handler = LocalIOHandler(params_file_name=params_file_name)
+
+    yaml_dict = io_handler.load_params()
+
+    params = StochasticConfigMapper.map_yaml_to_params(yaml_dict)
+
+    # ----------------------------
+    # Run stochastic Binomial Tree Bellman solver
+    # ----------------------------
+    bin_tree_optimizer_dynamic: BinTreeBellmanOptimizer = (
+        BinTreeBellmanOptimizer(**params)
+    )
+
+    bin_tree_optimizer_dynamic.solve()
+
+    io_handler.save_results(results=bin_tree_optimizer_dynamic.opt_results,
+                            run_config_id=bin_tree_optimizer_dynamic.run_config_id,
+                            run_task_id=run_task_id)
+
+    if plot:
+        bin_tree_optimizer_dynamic.plot()
 
 
 def main() -> None:
@@ -90,4 +132,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_task_id = uuid.uuid4().hex
+
+    main(params_file_name='stochastic/bin_tree/lifecycle_params.yaml', run_task_id=run_task_id, plot=True)

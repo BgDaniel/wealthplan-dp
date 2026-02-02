@@ -22,6 +22,7 @@ def crra_utility(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-8) -> np
         Array of utility values corresponding to consumption c.
     """
     c_safe: np.ndarray = np.maximum(c, 0.0) + epsilon
+
     if gamma == 1.0:
         return np.log(c_safe)
     else:

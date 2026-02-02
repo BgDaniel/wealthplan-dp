@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Type
+
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.salary import Salary
 from wealthplan.cashflows.rent import Rent
@@ -16,13 +17,13 @@ from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan_dyn
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
 
 # ----------------------
-# Constants for mapping
+# Lifecycle cashflow keys
 # ----------------------
-TYPE_SALARY = "salary"
-TYPE_RENT = "rent"
-TYPE_ELECTRICITY = "electricity"
-TYPE_TELECOMMUNICATION = "telecommunication"
-TYPE_GROCERIES = "groceries"
+TYPE_SALARY: str = "salary"
+TYPE_RENT: str = "rent"
+TYPE_ELECTRICITY: str = "electricity"
+TYPE_TELECOMMUNICATION: str = "telecommunication"
+TYPE_GROCERIES: str = "groceries"
 
 REGULAR_KEYS: List[str] = [
     TYPE_SALARY,
@@ -40,82 +41,75 @@ REGULAR_CLASS_MAP: Dict[str, Type[CashflowBase]] = {
     TYPE_GROCERIES: Groceries,
 }
 
-KEY_SIMULATION = "simulation_parameters"
-KEY_LIFECYCLE = "lifecycle"
-KEY_INSURANCE = "insurances"
-KEY_TECHNICAL = "technical"
-KEY_TOTAL_PENSION = "total_pension"
+# ----------------------
+# YAML keys
+# ----------------------
+KEY_SIMULATION: str = "simulation_parameters"
+KEY_LIFECYCLE: str = "lifecycle"
+KEY_INSURANCE: str = "insurances"
+KEY_TOTAL_PENSION: str = "total_pension"
 
-KEY_RUN_CONFIG_ID = "run_config_id"
-KEY_CASHFLOWS = "cashflows"
-KEY_START_DATE = "start_date"
-KEY_END_DATE = "end_date"
-KEY_RETIREMENT_DATE = "retirement_date"
-KEY_INITIAL_WEALTH = "initial_wealth"
-KEY_YEARLY_RETURN = "yearly_return"
-KEY_BETA = "beta"
-KEY_W_MAX = "w_max"
-KEY_W_STEP = "w_step"
-KEY_C_STEP = "c_step"
-KEY_USE_CACHE = "use_cache"
-KEY_NAME = "name"
-KEY_MONTHLY_CONTRIBUTION = "monthly_contribution"
-KEY_INITIAL_MONTHLY_CONTRIBUTION = "initial_monthly_contribution"
-KEY_MONTHLY_PAYOUT_BRUTTO = "monthly_payout_brutto"
-KEY_TAXABLE_EARNINGS_SHARE = "taxable_earnings_share"
-KEY_CONTRIBUTION_GROWTH_RATE = "contribution_growth_rate"
-KEY_START_DATE_PLAN = "start_date"
-KEY_RUN_TASK_ID = "run_task_id"
+KEY_RUN_CONFIG_ID: str = "run_config_id"
+KEY_START_DATE: str = "start_date"
+KEY_END_DATE: str = "end_date"
+KEY_RETIREMENT_DATE: str = "retirement_date"
+KEY_INITIAL_WEALTH: str = "initial_wealth"
+KEY_YEARLY_RETURN: str = "yearly_return"
+KEY_BETA: str = "beta"
+KEY_CASHFLOWS: str = "cashflows"
+
+KEY_NAME: str = "name"
+KEY_MONTHLY_CONTRIBUTION: str = "monthly_contribution"
+KEY_INITIAL_MONTHLY_CONTRIBUTION: str = "initial_monthly_contribution"
+KEY_MONTHLY_PAYOUT_BRUTTO: str = "monthly_payout_brutto"
+KEY_TAXABLE_EARNINGS_SHARE: str = "taxable_earnings_share"
+KEY_CONTRIBUTION_GROWTH_RATE: str = "contribution_growth_rate"
+KEY_START_DATE_PLAN: str = "start_date"
 
 
 class ConfigMapper:
     """
-    Maps already-loaded YAML params (as Python dict) into the parameter dictionary
-    required by the deterministic Bellman optimizer.
+    Base mapper that converts YAML configuration dictionaries into
+    domain-level optimizer parameters.
 
     Responsibilities:
-    - Transform lifecycle, insurance, and pension cashflows into proper CashflowBase objects.
-    - Merge simulation and technical parameters into a single dict.
+    - Read simulation parameters
+    - Create lifecycle cashflows
+    - Create insurance cashflows
+    - Aggregate private and public pension plans
 
-    This class does NOT fetch YAML itself; it works purely on dicts.
+    This class is solver-agnostic and contains no numerical or
+    technical optimization parameters.
     """
 
-    @staticmethod
-    def map_yaml_to_params(data: Dict[str, Any]) -> Dict[str, Any]:
+    @classmethod
+    def map_yaml_to_params(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Convert a loaded YAML dictionary into optimizer-ready parameters.
+        Map YAML configuration into domain-level optimizer parameters.
 
         Args:
-            data: YAML params loaded as a Python dict.
+            data: Parsed YAML configuration as a dictionary.
 
         Returns:
-            A dictionary with keys expected by DeterministicBellmanOptimizer, e.g.:
-            - 'run_id', 'start_date', 'end_date', 'retirement_date'
-            - 'initial_wealth', 'yearly_return', 'beta'
-            - 'cashflows' (list of CashflowBase objects)
-            - 'w_max', 'w_step', 'c_step', 'use_cache'
+            Dictionary containing simulation parameters and a list
+            of instantiated CashflowBase objects.
         """
-        sim_params: Dict[str, Any] = data.get(KEY_SIMULATION, {})
-        technical_params: Dict[str, Any] = data.get(KEY_TECHNICAL, {})
+        sim: Dict[str, Any] = data[KEY_SIMULATION]
 
         cashflows: List[CashflowBase] = []
-        cashflows.extend(ConfigMapper._load_lifecycle_cashflows(data))
-        cashflows.extend(ConfigMapper._load_insurances(data))
-        cashflows.extend(ConfigMapper._load_total_pension(data))
+        cashflows.extend(cls._load_lifecycle_cashflows(data))
+        cashflows.extend(cls._load_insurances(data))
+        cashflows.extend(cls._load_total_pension(data))
 
         return {
-            KEY_RUN_CONFIG_ID: sim_params[KEY_RUN_CONFIG_ID],
-            KEY_START_DATE: sim_params[KEY_START_DATE],
-            KEY_END_DATE: sim_params[KEY_END_DATE],
-            KEY_RETIREMENT_DATE: sim_params[KEY_RETIREMENT_DATE],
-            KEY_INITIAL_WEALTH: sim_params[KEY_INITIAL_WEALTH],
-            KEY_YEARLY_RETURN: sim_params[KEY_YEARLY_RETURN],
-            KEY_BETA: sim_params[KEY_BETA],
+            KEY_RUN_CONFIG_ID: sim[KEY_RUN_CONFIG_ID],
+            KEY_START_DATE: sim[KEY_START_DATE],
+            KEY_END_DATE: sim[KEY_END_DATE],
+            KEY_RETIREMENT_DATE: sim[KEY_RETIREMENT_DATE],
+            KEY_INITIAL_WEALTH: sim[KEY_INITIAL_WEALTH],
+            KEY_YEARLY_RETURN: sim[KEY_YEARLY_RETURN],
+            KEY_BETA: sim[KEY_BETA],
             KEY_CASHFLOWS: cashflows,
-            KEY_W_MAX: technical_params[KEY_W_MAX],
-            KEY_W_STEP: technical_params[KEY_W_STEP],
-            KEY_C_STEP: technical_params[KEY_C_STEP],
-            KEY_USE_CACHE: technical_params[KEY_USE_CACHE]
         }
 
     # ----------------------
@@ -124,54 +118,56 @@ class ConfigMapper:
     @staticmethod
     def _load_lifecycle_cashflows(data: Dict[str, Any]) -> List[CashflowBase]:
         """
-        Load standard lifecycle cashflows from YAML params.
+        Instantiate regular lifecycle cashflows (salary, rent, etc.).
 
         Args:
-            data: YAML params as dict.
+            data: Parsed YAML configuration.
 
         Returns:
-            List of CashflowBase objects corresponding to lifecycle cashflows.
+            List of instantiated CashflowBase objects.
         """
         lifecycle: Dict[str, Any] = data.get(KEY_LIFECYCLE, {})
         cashflows: List[CashflowBase] = []
 
         for key in REGULAR_KEYS:
-            if key not in lifecycle:
-                continue
-            params: Dict[str, Any] = lifecycle[key]
-            cls: Type[CashflowBase] = REGULAR_CLASS_MAP[key]
-            cashflows.append(cls(**params))
+            if key in lifecycle:
+                cls: Type[CashflowBase] = REGULAR_CLASS_MAP[key]
+                cashflows.append(cls(**lifecycle[key]))
 
         return cashflows
 
     @staticmethod
     def _load_insurances(data: Dict[str, Any]) -> List[CashflowBase]:
         """
-        Load insurance cashflows from YAML params.
+        Instantiate insurance cashflows.
 
         Args:
-            data: YAML params as dict.
+            data: Parsed YAML configuration.
 
         Returns:
-            List of Insurance objects.
+            List of Insurance cashflows.
         """
         lifecycle: Dict[str, Any] = data.get(KEY_LIFECYCLE, {})
-        ins_list: List[Dict[str, Any]] = lifecycle.get(KEY_INSURANCE, [])
+        insurance_cfg: List[Dict[str, Any]] = lifecycle.get(KEY_INSURANCE, [])
 
-        return [Insurance(**i) for i in ins_list]
+        return [Insurance(**cfg) for cfg in insurance_cfg]
 
+    # ----------------------
+    # Pension handling
+    # ----------------------
     @staticmethod
     def _load_total_pension(data: Dict[str, Any]) -> List[CashflowBase]:
         """
-        Load total pension cashflows (private and public) from YAML params.
+        Create an aggregated TotalPension cashflow from all pension plans.
 
         Args:
-            data: YAML params as dict.
+            data: Parsed YAML configuration.
 
         Returns:
-            List with a single TotalPension object containing all pension plans.
+            List containing a single TotalPension instance,
+            or an empty list if no pension configuration exists.
         """
-        cfg: Dict[str, Any] = data.get(KEY_TOTAL_PENSION)
+        cfg: Dict[str, Any] | None = data.get(KEY_TOTAL_PENSION)
         if not cfg:
             return []
 
@@ -206,7 +202,7 @@ class ConfigMapper:
         for p in cfg.get("public_pension_plan", []):
             pension_plans.append(
                 PublicPensionPlan(
-                    monthly_payout_brutto=p[KEY_MONTHLY_PAYOUT_BRUTTO],
+                    monthly_payout_brutto=p[KEY_MONTHLY_PAYOUT_BRUTTO]
                 )
             )
 
