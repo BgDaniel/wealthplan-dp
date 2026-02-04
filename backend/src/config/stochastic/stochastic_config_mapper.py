@@ -1,7 +1,7 @@
 from typing import Any, Dict
 
 
-from config.config_mapper import ConfigMapper
+from config.config_mapper import ConfigMapper, KEY_SIMULATION
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.survival_process.survival_process import (
     SurvivalProcess,
@@ -19,6 +19,8 @@ KEY_SURVIVAL_B: str = "b"
 KEY_SURVIVAL_C: str = "c"
 KEY_SURVIVAL_AGE: str = "age"
 KEY_SURVIVAL_SEED: str = "seed"
+
+KEY_CURRENT_AGE: str = "current_age"
 
 
 class StochasticConfigMapper(ConfigMapper):
@@ -75,5 +77,9 @@ class StochasticConfigMapper(ConfigMapper):
                 KEY_SURVIVAL_PROCESS: survival_process,
             }
         )
+
+        current_age = data[KEY_SIMULATION].get(KEY_CURRENT_AGE, 0)
+
+        params[KEY_CURRENT_AGE] = current_age
 
         return params

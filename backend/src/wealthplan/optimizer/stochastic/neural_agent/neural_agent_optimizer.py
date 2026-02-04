@@ -17,6 +17,8 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
     SurvivalProcess,
 )
 
+EPS: float = 1e-5
+
 
 class NeuralAgentWealthOptimizer:
     """
@@ -36,6 +38,7 @@ class NeuralAgentWealthOptimizer:
         run_config_id: str,
         start_date: dt.date,
         end_date: dt.date,
+        current_age: int,
         retirement_date: dt.date,
         initial_wealth: float,
         yearly_return: float,
@@ -101,6 +104,30 @@ class NeuralAgentWealthOptimizer:
         self.instant_utility: Callable[[np.ndarray], np.ndarray] = instant_utility
         self.device: str = device
 
+        self.months = [
+            d.date()
+            for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
+        ]
+        self.n_months = len(self.months)
+
+        self.time_grid = (
+            np.array(
+                [(m - self.months[0]).days / 365.0 for m in self.months],
+                dtype=np.float64,
+            )
+        )
+
+        self.cf = np.array([self.monthly_cashflow(month) for month in self.months])
+
+        self.current_age = current_age
+
+        self.age_grid = self.time_grid + self.current_age
+
+        self.dt = 1.0 / 12.0
+        self.survival_probs = self.survival_process.conditional_survival_probabilities(
+            self.age_grid, self.dt
+        )
+
         # Neural network agent
         self.policy_net: SimplePolicyNetwork = SimplePolicyNetwork().to(self.device)
         self.optimizer: optim.Adam = optim.Adam(self.policy_net.parameters(), lr=lr)
@@ -112,6 +139,10 @@ class NeuralAgentWealthOptimizer:
         self.opt_consumption: Optional[pd.DataFrame] = None
         self.opt_savings: Optional[pd.DataFrame] = None
         self.opt_stocks: Optional[pd.DataFrame] = None
+
+    def monthly_cashflow(self, date: dt.date) -> float:
+        """Sum deterministic cashflows for the given month."""
+        return sum(cf.cashflow(date) for cf in self.cashflows)
 
     def _build_state_tensor(
         self, available_savings: np.ndarray, available_stocks: np.ndarray, t: int
@@ -144,8 +175,9 @@ class NeuralAgentWealthOptimizer:
         )
 
         # Validate fractions are within [0, 1]
-        if np.any(savings_frac < 0.0) or np.any(savings_frac > 1.0):
+        if np.any(savings_frac < -EPS) or np.any(savings_frac > 1.0 + EPS):
             offending = savings_frac[(savings_frac < 0.0) | (savings_frac > 1.0)]
+
             raise ValueError(
                 f"savings_frac out of bounds [0,1]! Found values: {offending}"
             )
@@ -155,8 +187,8 @@ class NeuralAgentWealthOptimizer:
             self.initial_wealth - self.saving_min
         )
 
-        if np.any(wealth_scaled > self.max_wealth_factor):
-            offending = wealth_scaled[wealth_scaled > self.max_wealth_factor]
+        if np.any(wealth_scaled > self.max_wealth_factor + EPS):
+            offending = wealth_scaled[wealth_scaled > self.max_wealth_factor + EPS]
 
             raise ValueError(
                 f"Scaled wealth exceeds max_wealth_factor!\n"
@@ -184,9 +216,77 @@ class NeuralAgentWealthOptimizer:
 
         return state_tensor
 
+    def _enforce_max_wealth(
+        self, savings: np.ndarray, stocks: np.ndarray, consumption: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Enforce maximum allowed wealth by proportionally increasing consumption
+        and reducing savings & stocks if scaled total wealth exceeds max_wealth_factor.
+
+        Args:
+            savings (np.ndarray): Current savings (batch_size,)
+            stocks (np.ndarray): Current stock holdings (batch_size,)
+            consumption (np.ndarray): Current consumption (batch_size,)
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]: Adjusted (savings, stocks, consumption)
+
+        Raises:
+            ValueError: If final values violate the wealth boundaries beyond eps tolerance.
+        """
+        # Compute scaled total wealth
+        total_wealth = savings + stocks
+        wealth_scaled = (total_wealth - self.saving_min) / (
+            self.initial_wealth - self.saving_min
+        )
+
+        # Identify paths exceeding max wealth factor
+        mask_exceed = wealth_scaled > self.max_wealth_factor
+
+        if np.any(mask_exceed):
+            # Excess in **scaled wealth units**
+            excess_scaled = wealth_scaled[mask_exceed] - self.max_wealth_factor
+            # Convert back to raw wealth excess
+            excess = excess_scaled * (self.initial_wealth - self.saving_min)
+
+            # Compute fraction of wealth in savings/stocks
+            frac_savings = savings[mask_exceed] / total_wealth[mask_exceed]
+            frac_stocks = stocks[mask_exceed] / total_wealth[mask_exceed]
+
+            # Increase consumption
+            consumption[mask_exceed] += excess
+
+            # Reduce savings and stocks proportionally
+            savings[mask_exceed] -= excess * frac_savings
+            stocks[mask_exceed] -= excess * frac_stocks
+
+        # Enforce minimum constraints
+        savings = np.maximum(savings, self.saving_min)
+        stocks = np.maximum(stocks, 0.0)
+        total_wealth = savings + stocks
+        wealth_scaled = (total_wealth - self.saving_min) / (
+            self.initial_wealth - self.saving_min
+        )
+
+        if np.any(savings < self.saving_min - EPS):
+            raise ValueError(
+                f"Some savings fell below the minimum (eps={EPS}): {savings[savings < self.saving_min - EPS]}"
+            )
+
+        if np.any(stocks < -EPS):
+            raise ValueError(
+                f"Some stocks are negative (eps={EPS}): {stocks[stocks < -EPS]}"
+            )
+
+        if np.any(wealth_scaled > self.max_wealth_factor + EPS):
+            raise ValueError(
+                f"Scaled total wealth exceeds maximum allowed (eps={EPS}): {wealth_scaled[wealth_scaled > self.max_wealth_factor + EPS]}"
+            )
+
+        return savings, stocks, consumption
+
     def _simulate_forward(
         self, batch_size: int = None, batch_seed: int = None
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Simulate forward one episode batch using the current policy.
 
@@ -222,21 +322,30 @@ class NeuralAgentWealthOptimizer:
         stocks_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
         consumption_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
 
+        wealth_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
+        wealth_paths[0] = savings_paths[0]  # initial wealth, stocks are zero
+
         for t in range(1, self.n_months):
             # ----------------------------
             # Compute deterministic cashflows for this month
             # ----------------------------
-            cf_t_before = np.array(
-                [sum(cf.cashflow(self.months[t - 1]) for cf in self.cashflows)]
-                * batch_size,
-                dtype=np.float32,
-            )
+            cf_t_before = self.cf[t - 1]
 
             # Add cashflows to savings BEFORE taking any actions
             available_savings_before = savings_paths[t - 1] + cf_t_before
 
             returns_t = returns_paths[:, t]
-            alive_mask = survival_paths[:, t - 1]
+
+            # ----------------------------
+            # Ensure max wealth is not violated after cashflows
+            # ----------------------------
+            available_savings_before, stocks_paths[t - 1], _ = self._enforce_max_wealth(
+                available_savings_before,
+                stocks_paths[t - 1],
+                consumption=np.zeros_like(
+                    available_savings_before
+                ),  # no extra consumption yet
+            )
 
             # Vectorized state for the whole batch
             state_tensor = self._build_state_tensor(
@@ -278,11 +387,27 @@ class NeuralAgentWealthOptimizer:
                 )
 
             # record
-            savings_paths[t, :] = savings_after_rebalancing * (1 + self.monthly_return)
-            stocks_paths[t, :] = stocks_after_rebalancing * returns_t
-            consumption_paths[t - 1, :] = consumption
+            savings_next = savings_after_rebalancing * (1 + self.monthly_return)
+            stocks_next = stocks_after_rebalancing * returns_t
 
-        return savings_paths, stocks_paths, consumption_paths
+            # ----------------------------
+            # Enforce max wealth for current timestep
+            # ----------------------------
+            savings_next, stocks_next, consumption = self._enforce_max_wealth(
+                savings_next, stocks_next, consumption
+            )
+
+            wealth_next = savings_next + stocks_next
+
+            # ----------------------------
+            # Record paths
+            # ----------------------------
+            savings_paths[t, :] = savings_next
+            stocks_paths[t, :] = stocks_next
+            consumption_paths[t - 1, :] = consumption
+            wealth_paths[t, :] = wealth_next
+
+        return savings_paths, stocks_paths, consumption_paths, wealth_paths
 
     def train(
         self,
@@ -305,6 +430,7 @@ class NeuralAgentWealthOptimizer:
         plot : bool
             If True, will plot training progress after each epoch.
         """
+        self.batch_size = batch_size
 
         epoch_rewards: List[float] = []
 
@@ -313,7 +439,7 @@ class NeuralAgentWealthOptimizer:
 
             for batch_idx in range(n_batches):
                 # simulate batch_size paths
-                savings_paths, stocks_paths, consumption_paths = self._simulate_forward(
+                savings_paths, stocks_paths, consumption_paths, wealth_paths = self._simulate_forward(
                     batch_size=batch_size
                 )
 
@@ -341,6 +467,7 @@ class NeuralAgentWealthOptimizer:
         self.opt_savings = pd.DataFrame(savings_paths, index=self.months)
         self.opt_stocks = pd.DataFrame(stocks_paths, index=self.months)
         self.opt_consumption = pd.DataFrame(consumption_paths, index=self.months)
+        self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
 
         if plot:
             plt.figure(figsize=(10, 6))
@@ -402,8 +529,7 @@ class NeuralAgentWealthOptimizer:
 
         # --- Pick sample simulation ---
         if sample_sim is None:
-            np.random.seed(self.seed)
-            sample_sim = np.random.randint(self.n_sims)
+            sample_sim = np.random.randint(self.batch_size)
 
         months = self.months
 
