@@ -36,7 +36,8 @@ def main(
         BellmanOptimizer(**params)
     )
 
-    bellman_optimizer.solve()
+    bellman_optimizer.backward_induction()
+    bellman_optimizer.roll_forward()
 
     io_handler.save_results(results=bellman_optimizer.opt_results,
                             run_config_id=bellman_optimizer.run_config_id,

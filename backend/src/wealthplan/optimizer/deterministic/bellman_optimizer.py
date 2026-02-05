@@ -1,4 +1,6 @@
 import logging
+import datetime as dt
+from typing import List
 
 import numpy as np
 import pandas as pd
@@ -7,17 +9,20 @@ from numba import prange, njit
 from tqdm import tqdm
 
 
-from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
+from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY, ResultCache
+from wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.optimizer.math_tools.penality_functions import PenaltyFunction
 from wealthplan.optimizer.math_tools.utility_functions import (
-    crra_utility_numba,
+    crra_utility_numba, UtilityFunction,
 )
-from wealthplan.optimizer.optimizer_base import OptimizerBase, OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY, create_grid
+from wealthplan.optimizer.optimizer_base import OptimizerBase, OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY, create_grid, \
+    CASHFLOW_KEY
 
 logger = logging.getLogger(__name__)
 
 
 @njit(parallel=True)
-def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
+def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step, utility_func):
     n_w = wealth_grid.shape[0]
 
     v_opt = np.zeros(n_w, dtype=np.float32)
@@ -34,7 +39,7 @@ def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
         W_next = (W + cf_t - c_cands) * (1.0 + r)
         V_next = np.interp(W_next, wealth_grid, v_t_next)
 
-        instant_util_arr = crra_utility_numba(c_cands)
+        instant_util_arr = utility_func(c_cands)
         total_val_arr = instant_util_arr + beta * V_next
 
         idx_max = np.argmax(total_val_arr)
@@ -49,8 +54,43 @@ class BellmanOptimizer(OptimizerBase):
     """
     Deterministic Bellman (backward induction) optimizer.
     """
-    def __init__(self, **params):
-        super().__init__(**params)
+    def __init__(self,
+                 run_config_id: str,
+                 start_date: dt.date,
+                 end_date: dt.date,
+                 retirement_date: dt.date,
+                 initial_wealth: float,
+                 yearly_return: float,
+                 beta: float,
+                 cashflows: List[CashflowBase],
+                 utility_function: UtilityFunction,
+                 terminal_penalty: PenaltyFunction,
+                 w_max: float,
+                 w_step: float,
+                 c_step: float,
+                 use_cache: bool):
+        
+        super().__init__(run_config_id=run_config_id, start_date=start_date, end_date=end_date,
+                                       retirement_date=retirement_date, initial_wealth=initial_wealth,
+                                       yearly_return=yearly_return, cashflows=cashflows)
+
+        self.beta = beta
+
+        self.utility_function = utility_function
+        self.terminal_penalty = terminal_penalty
+
+        self.w_max = w_max
+        self.w_step = w_step
+
+        self.wealth_grid = create_grid(min_val=0.0, max_val=self.w_max, delta=self.w_step)
+
+        self.c_step = c_step
+
+        self.use_cache = use_cache
+        self.cache = ResultCache(run_id=run_config_id, enabled=self.use_cache)
+
+        self.value_function = {}
+        self.policy = {}
 
         self.opt_results = pd.DataFrame(
             0,
@@ -58,7 +98,7 @@ class BellmanOptimizer(OptimizerBase):
             columns=[OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY]
         )
 
-    def _backward_induction(self) -> None:
+    def backward_induction(self) -> None:
         """
         Compute value function and policy by backward induction on discrete grids.
         Results are stored in self.value_function and self.policy keyed by date.
@@ -94,6 +134,7 @@ class BellmanOptimizer(OptimizerBase):
                 v_t_next,
                 cf_t,
                 self.c_step,
+                self.utility_function
             )
 
             # Store results
@@ -106,7 +147,7 @@ class BellmanOptimizer(OptimizerBase):
 
             v_t_next = v_t
 
-    def _roll_forward(self) -> None:
+    def roll_forward(self) -> None:
         """
         Given self.policy filled per date and self.wealth_grid, compute
         opt_wealth, opt_consumption and monthly_cashflows by forward simulation.

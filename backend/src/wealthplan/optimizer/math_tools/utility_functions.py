@@ -9,7 +9,7 @@ UtilityFunction = Callable[[np.ndarray], np.ndarray]
 # -------------------------------------------------------------------
 # Standard utility functions
 # -------------------------------------------------------------------
-def crra_utility(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-8) -> np.ndarray:
+def crra_utility(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-4) -> np.ndarray:
     """
     Constant Relative Risk Aversion (CRRA) utility function.
 
@@ -30,7 +30,7 @@ def crra_utility(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-8) -> np
 
 
 @njit()
-def crra_utility_numba(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-8) -> np.ndarray:
+def crra_utility_numba(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-4) -> np.ndarray:
     """
     Numba-accelerated CRRA utility function for numerical efficiency.
 
@@ -44,12 +44,14 @@ def crra_utility_numba(c: np.ndarray, gamma: float = 0.5, epsilon: float = 1e-8)
     """
     n = c.shape[0]
     u = np.empty(n, dtype=np.float32)
+
     for i in range(n):
         ci = max(c[i], 0.0) + epsilon
         if gamma == 1.0:
             u[i] = np.log(ci)
         else:
             u[i] = (ci ** (1.0 - gamma)) / (1.0 - gamma)
+
     return u
 
 
@@ -80,9 +82,11 @@ def log_utility_numba(c: np.ndarray, epsilon: float = 1e-8) -> np.ndarray:
     """
     n = c.shape[0]
     u = np.empty(n, dtype=np.float32)
+
     for i in range(n):
         ci = max(c[i], epsilon)
         u[i] = np.log(ci)
+
     return u
 
 

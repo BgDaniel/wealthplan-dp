@@ -2,13 +2,13 @@
 # Simulation parameters for lifecycle financial planning
 # ----------------------------
 simulation_parameters:
-  run_config_id: "neural_agent"
-  initial_wealth: 145000.0
+  run_config_id: "bin_tree"
+  initial_wealth: 10000.0
   start_date: 2026-01-01
-  end_date: 2081-01-01
-  current_age: 37
+  end_date: 2031-01-01
   retirement_date: 2055-07-01
   yearly_return: 0.04
+  beta: 0.999
 
 # ----------------------------
 # Lifecycle cashflows
@@ -16,7 +16,7 @@ simulation_parameters:
 lifecycle:
   # Regular cashflows
   salary:
-    monthly_amount: 6800
+    monthly_amount: 1000
     retirement_date: 2055-07-01
 
   rent:
@@ -86,29 +86,30 @@ total_pension:
 # ----------------------------
 stochastic:
   stochastic: True
-
-  gbm_returns:
-    mu: 0.05
-    sigma: 0.0
-    seed: 42
+  n_sims: 10000
+  seed: 2906
+  sigma: 0.4
 
   survival_model:
     b: 9.5e-5
     c: 0.085
     seed: 123
 
-# ----------------------------
-# Neural agent parameters
-# ----------------------------
-neural_agent:
-  lr: 0.001
-  device: "cpu"
-  saving_min: 200.0
-  max_wealth_factor: 5.0
+technical:
+  w_max: 20000.0
+  w_step: 100.0
+  c_step: 100.0
+  use_cache: true
 
-instant_utility:
-  type: "crra"
-  params:
+# ----------------------------
+# Utility and Penalty Functions
+# ----------------------------
+functions:
+  utility_function:
+    type: "crra"        # Options: "crra" or "log"
     gamma: 0.5
     epsilon: 1e-8
+
+  terminal_penalty:
+    type: "square"      # Options: "square"
 

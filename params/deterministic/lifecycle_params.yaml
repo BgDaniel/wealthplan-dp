@@ -89,3 +89,16 @@ technical:
   w_step: 100.0
   c_step: 100.0
   use_cache: true
+
+# ----------------------------
+# Utility and Penalty Functions
+# ----------------------------
+functions:
+  utility_function:
+    type: "crra"        # Options: "crra" or "log"
+    gamma: 0.5
+    epsilon: 1e-8
+
+  terminal_penalty:
+    type: "square"      # Options: "square"
+

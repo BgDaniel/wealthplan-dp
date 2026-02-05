@@ -1,9 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import norm
+
 
 import math
-from wealthplan.optimizer.bellman_optimizer import create_grid
+
+from wealthplan.optimizer.optimizer_base import create_grid
 
 
 class DynamicGridBuilder:
@@ -15,7 +16,7 @@ class DynamicGridBuilder:
         n_steps: int,
         L_t: np.ndarray,
         c_step: float,
-        cf: np.nd.array,
+        cf: np.array,
         alpha: float = 0.2,
         beta:float = 0.005,
         max_grid_shift: float = 0.3,

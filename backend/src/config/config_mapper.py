@@ -1,4 +1,6 @@
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Type, Callable
+import numpy as np
+
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.salary import Salary
@@ -15,6 +17,10 @@ from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan_dyn
     PrivatePensionPlanDynamic,
 )
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
+from wealthplan.optimizer.math_tools.utility_functions import (
+    crra_utility_numba,
+    log_utility_numba,
+)
 
 # ----------------------
 # Lifecycle cashflow keys
@@ -55,7 +61,6 @@ KEY_END_DATE: str = "end_date"
 KEY_RETIREMENT_DATE: str = "retirement_date"
 KEY_INITIAL_WEALTH: str = "initial_wealth"
 KEY_YEARLY_RETURN: str = "yearly_return"
-KEY_BETA: str = "beta"
 KEY_CASHFLOWS: str = "cashflows"
 
 KEY_NAME: str = "name"
@@ -66,6 +71,21 @@ KEY_TAXABLE_EARNINGS_SHARE: str = "taxable_earnings_share"
 KEY_CONTRIBUTION_GROWTH_RATE: str = "contribution_growth_rate"
 KEY_START_DATE_PLAN: str = "start_date"
 
+KEY_TECHNICAL = "technical"
+KEY_W_MAX = "w_max"
+KEY_W_STEP = "w_step"
+KEY_C_STEP = "c_step"
+KEY_USE_CACHE = "use_cache"
+KEY_FUNCTIONS = "functions"
+KEY_UTILITY_FUNCTION = "utility_function"
+KEY_TERMINAL_PENALTY = "terminal_penalty"
+
+KEY_USE_CACHE: str = "use_cache"
+KEY_BETA: str = "beta"
+
+KEY_W_MAX: str = "w_max"
+KEY_W_STEP: str = "w_step"
+KEY_C_STEP: str = "c_step"
 
 class ConfigMapper:
     """
@@ -84,16 +104,7 @@ class ConfigMapper:
 
     @classmethod
     def map_yaml_to_params(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Map YAML configuration into domain-level optimizer parameters.
-
-        Args:
-            data: Parsed YAML configuration as a dictionary.
-
-        Returns:
-            Dictionary containing simulation parameters and a list
-            of instantiated CashflowBase objects.
-        """
+        # Base simulation parameters
         sim: Dict[str, Any] = data[KEY_SIMULATION]
 
         cashflows: List[CashflowBase] = []
@@ -101,16 +112,23 @@ class ConfigMapper:
         cashflows.extend(cls._load_insurances(data))
         cashflows.extend(cls._load_total_pension(data))
 
-        return {
+        params: Dict[str, Any] = {
             KEY_RUN_CONFIG_ID: sim[KEY_RUN_CONFIG_ID],
             KEY_START_DATE: sim[KEY_START_DATE],
             KEY_END_DATE: sim[KEY_END_DATE],
             KEY_RETIREMENT_DATE: sim[KEY_RETIREMENT_DATE],
             KEY_INITIAL_WEALTH: sim[KEY_INITIAL_WEALTH],
             KEY_YEARLY_RETURN: sim[KEY_YEARLY_RETURN],
-            KEY_BETA: sim[KEY_BETA],
             KEY_CASHFLOWS: cashflows,
         }
+
+        # ----------------------
+        # Load utility function
+        # ----------------------
+        functions: Dict[str, Any] = data.get(KEY_FUNCTIONS, {})
+        params[KEY_UTILITY_FUNCTION] = cls._load_utility_function(functions)
+
+        return params
 
     # ----------------------
     # Lifecycle cashflows
@@ -207,3 +225,28 @@ class ConfigMapper:
             )
 
         return [TotalPension(pensions=pension_plans, retirement_date=retirement_date)]
+
+    @staticmethod
+    def _load_utility_function(functions: Dict[str, Any]) -> Callable[[np.ndarray], np.ndarray]:
+        """
+        Load a Numba-accelerated utility function from the configuration.
+
+        Args:
+            functions: Dictionary containing 'utility_function' config.
+
+        Returns:
+            Callable: Numba-accelerated utility function.
+        """
+        utility_config: Dict[str, Any] = functions.get("utility_function", {})
+        utility_type: str = utility_config.get("type", "crra").lower()
+
+        if utility_type == "crra":
+            gamma = float(utility_config.get("gamma", 0.5))
+            epsilon = float(utility_config.get("epsilon", 1e-8))
+            return lambda c: crra_utility_numba(c, gamma=gamma, epsilon=epsilon)
+        elif utility_type == "log":
+            epsilon = float(utility_config.get("epsilon", 1e-8))
+            return lambda c: log_utility_numba(c)
+        else:
+            raise ValueError(f"Unknown utility type: {utility_type}")
+

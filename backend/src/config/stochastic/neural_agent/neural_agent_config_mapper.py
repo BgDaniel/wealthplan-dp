@@ -1,11 +1,17 @@
 from typing import Any, Dict
 
-from config.stochastic.stochastic_config_mapper import StochasticConfigMapper
+from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, KEY_STOCHASTIC
 from wealthplan.optimizer.math_tools.utility_functions import (
     UtilityFunction,
     crra_utility,
     log_utility,
 )
+from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
+
+KEY_GBM_RETURNS: str = "gbm_returns"
+KEY_GBM_MU: str = "mu"
+KEY_GBM_SIGMA: str = "sigma"
+KEY_GBM_SEED: str = "seed"
 
 # ----------------------
 # Neural-agent keys
@@ -55,6 +61,27 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
         # ----------------------
         params: Dict[str, Any] = super().map_yaml_to_params(data)
 
+        stochastic: Dict[str, Any] = data[KEY_STOCHASTIC]
+
+        # ----------------------
+        # GBM returns
+        # ----------------------
+        gbm_returns: Dict[str, Any] = stochastic[KEY_GBM_RETURNS]
+
+        mu = gbm_returns[KEY_GBM_MU]
+        sigma = gbm_returns[KEY_GBM_SIGMA]
+
+        gbm: GBM = GBM(
+            mu=mu,
+            sigma=sigma
+        )
+
+        params.update(
+            {
+                KEY_GBM_RETURNS: gbm
+            }
+        )
+
         # ----------------------
         # Neural-agent parameters
         # ----------------------
@@ -66,33 +93,12 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
         max_wealth_factor: float = neural_cfg[KEY_MAX_WEALTH_FACTOR]
 
         # ----------------------
-        # Instant utility function
-        # ----------------------
-        utility_cfg: Dict[str, Any] = data[KEY_INSTANT_UTILITY]
-        util_type: str = utility_cfg[KEY_UTILITY_TYPE]
-        util_params: Dict[str, Any] = utility_cfg.get(KEY_UTILITY_PARAMS, {})
-
-        instant_utility: UtilityFunction
-
-        if util_type == "crra":
-            gamma: float = float(util_params.get(KEY_UTILITY_GAMMA, 1.0))
-            epsilon: float = float(util_params.get(KEY_UTILITY_EPSILON, 1e-8))
-
-            # Vectorized NumPy CRRA utility
-            instant_utility = lambda c, g=gamma, e=epsilon: crra_utility(c, g, e)
-        elif util_type == "log":
-            instant_utility = log_utility
-        else:
-            raise ValueError(f"Unsupported instant utility type: {util_type}")
-
-        # ----------------------
         # Update final parameters
         # ----------------------
         params.update(
             {
                 KEY_LR: lr,
                 KEY_DEVICE: device,
-                KEY_INSTANT_UTILITY: instant_utility,
                 KEY_SAVING_MIN: saving_min,
                 KEY_MAX_WEALTH_FACTOR: max_wealth_factor
             }

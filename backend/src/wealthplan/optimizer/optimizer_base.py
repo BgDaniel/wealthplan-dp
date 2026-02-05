@@ -63,9 +63,7 @@ class OptimizerBase(ABC):
         retirement_date: dt.date,
         initial_wealth: float,
         yearly_return: float,
-        beta: float,
-        cashflows: List[CashflowBase],
-        instant_utility: UtilityFunction
+        cashflows: List[CashflowBase]
     ) -> None:
         """
         Initialize common problem params.
@@ -88,13 +86,10 @@ class OptimizerBase(ABC):
         self.retirement_date = retirement_date
         self.initial_wealth: float = initial_wealth
         self.yearly_return: float = yearly_return
-        self.beta = beta
 
         self.monthly_return: float = (1 + self.yearly_return) ** (1/12) - 1
 
         self.cashflows: List[CashflowBase] = cashflows
-
-        self.instant_utility: UtilityFunction = instant_utility
 
         self.dt = 1.0 / 12.0
 
