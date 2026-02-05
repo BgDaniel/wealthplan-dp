@@ -8,7 +8,9 @@ from matplotlib import pyplot as plt
 from tqdm import trange
 from matplotlib.ticker import FuncFormatter
 
+
 from wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.optimizer.optimizer_base import OptimizerBase
 from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import (
     SimplePolicyNetwork,
 )
@@ -20,7 +22,7 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
 EPS: float = 1e-5
 
 
-class NeuralAgentWealthOptimizer:
+class NeuralAgentWealthOptimizer(OptimizerBase):
     """
     Neural-network agent-based wealth-consumption optimizer with two assets.
 
@@ -104,26 +106,10 @@ class NeuralAgentWealthOptimizer:
         self.instant_utility: Callable[[np.ndarray], np.ndarray] = instant_utility
         self.device: str = device
 
-        self.months = [
-            d.date()
-            for d in pd.date_range(start=self.start_date, end=self.end_date, freq="MS")
-        ]
-        self.n_months = len(self.months)
-
-        self.time_grid = (
-            np.array(
-                [(m - self.months[0]).days / 365.0 for m in self.months],
-                dtype=np.float64,
-            )
-        )
-
-        self.cf = np.array([self.monthly_cashflow(month) for month in self.months])
-
         self.current_age = current_age
 
         self.age_grid = self.time_grid + self.current_age
 
-        self.dt = 1.0 / 12.0
         self.survival_probs = self.survival_process.conditional_survival_probabilities(
             self.age_grid, self.dt
         )

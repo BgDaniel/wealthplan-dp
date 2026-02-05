@@ -1,10 +1,9 @@
 import uuid
 
+
 from config.deterministic.bellman_config_mapper import BellmanConfigMapper
 from io_handler.local_io_handler import LocalIOHandler
-from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
-    DeterministicBellmanOptimizer,
-)
+from wealthplan.optimizer.deterministic.bellman_optimizer import BellmanOptimizer
 
 
 def main(
@@ -33,18 +32,18 @@ def main(
     # ----------------------------
     # Run deterministic Bellman solver
     # ----------------------------
-    deterministic_optimizer: DeterministicBellmanOptimizer = (
-        DeterministicBellmanOptimizer(**params)
+    bellman_optimizer: BellmanOptimizer = (
+        BellmanOptimizer(**params)
     )
 
-    deterministic_optimizer.solve()
+    bellman_optimizer.solve()
 
-    io_handler.save_results(results=deterministic_optimizer.opt_results,
-                            run_config_id=deterministic_optimizer.run_config_id,
+    io_handler.save_results(results=bellman_optimizer.opt_results,
+                            run_config_id=bellman_optimizer.run_config_id,
                             run_task_id=run_task_id)
 
     if plot:
-        deterministic_optimizer.plot()
+        bellman_optimizer.plot()
 
 
 if __name__ == "__main__":

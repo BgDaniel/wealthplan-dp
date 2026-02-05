@@ -1,28 +1,17 @@
 import logging
-import datetime as dt
-from typing import List
+
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from numba import prange, njit
-
 from tqdm import tqdm
 
-from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
-from wealthplan.cashflows.cashflow_base import CashflowBase
 
-from wealthplan.optimizer.bellman_optimizer import (
-    BellmanOptimizer, create_grid, OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY, CASHFLOW_KEY,
-)
-from wealthplan.optimizer.math_tools.penality_functions import (
-    PenalityFunction,
-    square_penality,
-)
+from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
 from wealthplan.optimizer.math_tools.utility_functions import (
-    UtilityFunction,
-    crra_utility,
     crra_utility_numba,
 )
+from wealthplan.optimizer.optimizer_base import OptimizerBase, OPTIMAL_WEALTH_KEY, OPTIMAL_CONS_KEY, create_grid
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +45,7 @@ def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step):
     return v_opt, consumption_opt
 
 
-class DeterministicBellmanOptimizer(BellmanOptimizer):
+class BellmanOptimizer(OptimizerBase):
     """
     Deterministic Bellman (backward induction) optimizer.
     """

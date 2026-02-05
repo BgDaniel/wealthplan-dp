@@ -1,8 +1,6 @@
 import logging
 import datetime as dt
-
 from matplotlib.ticker import FuncFormatter
-
 import math
 from numba import njit, prange
 from typing import Optional, List
@@ -11,14 +9,8 @@ import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from wealthplan.cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY
+
 from wealthplan.cashflows.cashflow_base import CashflowBase
-
-
-from wealthplan.optimizer.bellman_optimizer import BellmanOptimizer, create_grid
-from wealthplan.optimizer.deterministic.deterministic_bellman_optimizer import (
-    DeterministicBellmanOptimizer,
-)
 from wealthplan.optimizer.math_tools.dynamic_wealth_grid import DynamicGridBuilder
 from wealthplan.optimizer.math_tools.penality_functions import (
     PenalityFunction,
@@ -29,9 +21,11 @@ from wealthplan.optimizer.math_tools.utility_functions import (
     crra_utility,
     crra_utility_numba,
 )
+from wealthplan.optimizer.optimizer_base import create_grid, OptimizerBase
 from wealthplan.optimizer.stochastic.survival_process.survival_model import (
     SurvivalModel,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +77,7 @@ def compute_optimal_policy(
     return v_opt, consumption_opt
 
 
-class BinTreeBellmanOptimizer(BellmanOptimizer):
+class BinTreeBellmanOptimizer(OptimizerBase):
     """
     Binomial tree-based Bellman optimizer.
     """
