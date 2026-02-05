@@ -63,7 +63,6 @@ class StochasticOptimizerBase(OptimizerBase):
         # Storage for simulation results
         self.optimal_wealth: Optional[pd.DataFrame] = None
         self.optimal_consumption: Optional[pd.DataFrame] = None
-        self.value_function: Optional[np.ndarray] = None
 
     def plot(
         self,

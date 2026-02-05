@@ -136,7 +136,7 @@ def train_agent(
     # Train agent
     # ----------------------------
     agent.train(
-        n_epochs=2,  # shortened for HPO / testing
+        n_epochs=50,  # shortened for HPO / testing
         batch_size=hyperparams[HP_BATCH_SIZE],
         n_batches=10,
         plot=plot_training,

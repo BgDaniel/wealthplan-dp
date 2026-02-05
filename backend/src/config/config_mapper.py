@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, Type, Callable
 import numpy as np
 
-
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.salary import Salary
 from wealthplan.cashflows.rent import Rent
@@ -17,10 +16,7 @@ from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan_dyn
     PrivatePensionPlanDynamic,
 )
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
-from wealthplan.optimizer.math_tools.utility_functions import (
-    crra_utility_numba,
-    log_utility_numba,
-)
+
 
 # ----------------------
 # Lifecycle cashflow keys
@@ -78,7 +74,6 @@ KEY_C_STEP = "c_step"
 KEY_USE_CACHE = "use_cache"
 KEY_FUNCTIONS = "functions"
 KEY_UTILITY_FUNCTION = "utility_function"
-KEY_TERMINAL_PENALTY = "terminal_penalty"
 
 KEY_USE_CACHE: str = "use_cache"
 KEY_BETA: str = "beta"
@@ -86,6 +81,9 @@ KEY_BETA: str = "beta"
 KEY_W_MAX: str = "w_max"
 KEY_W_STEP: str = "w_step"
 KEY_C_STEP: str = "c_step"
+
+KEY_GAMMA: str = "gamma"
+KEY_EPSILON: str = "epsilon"
 
 class ConfigMapper:
     """
@@ -125,8 +123,7 @@ class ConfigMapper:
         # ----------------------
         # Load utility function
         # ----------------------
-        functions: Dict[str, Any] = data.get(KEY_FUNCTIONS, {})
-        params[KEY_UTILITY_FUNCTION] = cls._load_utility_function(functions)
+        params.update(cls._load_crra_params(data))
 
         return params
 
@@ -227,7 +224,7 @@ class ConfigMapper:
         return [TotalPension(pensions=pension_plans, retirement_date=retirement_date)]
 
     @staticmethod
-    def _load_utility_function(functions: Dict[str, Any]) -> Callable[[np.ndarray], np.ndarray]:
+    def _load_crra_params(data: Dict[str, Any]) -> Callable[[np.ndarray], np.ndarray]:
         """
         Load a Numba-accelerated utility function from the configuration.
 
@@ -237,16 +234,12 @@ class ConfigMapper:
         Returns:
             Callable: Numba-accelerated utility function.
         """
-        utility_config: Dict[str, Any] = functions.get("utility_function", {})
-        utility_type: str = utility_config.get("type", "crra").lower()
+        utility_function: Dict[str, Any] = data.get(KEY_UTILITY_FUNCTION, {})
 
-        if utility_type == "crra":
-            gamma = float(utility_config.get("gamma", 0.5))
-            epsilon = float(utility_config.get("epsilon", 1e-8))
-            return lambda c: crra_utility_numba(c, gamma=gamma, epsilon=epsilon)
-        elif utility_type == "log":
-            epsilon = float(utility_config.get("epsilon", 1e-8))
-            return lambda c: log_utility_numba(c)
-        else:
-            raise ValueError(f"Unknown utility type: {utility_type}")
+        return {
+            KEY_GAMMA: float(utility_function.get(KEY_GAMMA, 0.5)),
+            KEY_EPSILON: float(utility_function.get(KEY_EPSILON, 1e-8))
+        }
+
+
 

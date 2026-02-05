@@ -93,12 +93,7 @@ technical:
 # ----------------------------
 # Utility and Penalty Functions
 # ----------------------------
-functions:
-  utility_function:
-    type: "crra"        # Options: "crra" or "log"
-    gamma: 0.5
-    epsilon: 1e-8
-
-  terminal_penalty:
-    type: "square"      # Options: "square"
+utility_function:
+  gamma: 0.5
+  epsilon: 1e-8
 

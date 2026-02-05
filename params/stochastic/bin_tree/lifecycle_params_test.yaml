@@ -20,34 +20,7 @@ lifecycle:
     retirement_date: 2055-07-01
 
   rent:
-    monthly_amount: 1100
-
-  electricity:
-    monthly_amount: 16
-
-  telecommunication:
-    monthly_amount: 80
-
-  groceries:
-    monthly_amount: 600
-
-  # Insurances
-  insurances:
-    - name: "Private Liability"
-      amount: 50
-      frequency: "Y"
-    - name: "Dental Supplemental"
-      amount: 40
-      frequency: "M"
-    - name: "Private accident"
-      amount: 160
-      frequency: "Y"
-    - name: "Household Contents"
-      amount: 90
-      frequency: "Y"
-    - name: "Disability"
-      amount: 56
-      frequency: "M"
+    monthly_amount: 500
 
 # ----------------------------
 # Total pension (aggregated & taxed together)
@@ -104,12 +77,8 @@ technical:
 # ----------------------------
 # Utility and Penalty Functions
 # ----------------------------
-functions:
-  utility_function:
-    type: "crra"        # Options: "crra" or "log"
-    gamma: 0.5
-    epsilon: 1e-8
+utility_function:
+  gamma: 0.5
+  epsilon: 1e-8
 
-  terminal_penalty:
-    type: "square"      # Options: "square"
 

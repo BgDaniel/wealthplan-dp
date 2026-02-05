@@ -12,14 +12,12 @@ from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY, ResultCach
 from wealthplan.cashflows.cashflow_base import CashflowBase
 
 from wealthplan.optimizer.math_tools.penality_functions import (
-    PenaltyFunction,
+    square_penalty,
 )
 from wealthplan.optimizer.math_tools.utility_functions import (
-    UtilityFunction,
-
-    crra_utility_numba,
+    crra_utility_numba
 )
-from wealthplan.optimizer.optimizer_base import create_grid, OptimizerBase
+from wealthplan.optimizer.optimizer_base import create_grid
 from wealthplan.optimizer.stochastic.stochastic_optimizer import StochasticOptimizerBase
 from wealthplan.optimizer.stochastic.survival_process.survival_model import (
     SurvivalModel,
@@ -29,7 +27,7 @@ from wealthplan.optimizer.stochastic.survival_process.survival_model import (
 logger = logging.getLogger(__name__)
 
 
-#@njit(parallel=True)
+@njit(parallel=True)
 def compute_optimal_policy(
     wealth_grid,
     u,
@@ -42,8 +40,8 @@ def compute_optimal_policy(
     cf_t,
     c_step,
     wealth_grid_next,
-    r,
-    utility_function
+    gamma,
+    epsilon
 ):
     n_w = wealth_grid.shape[0]
 
@@ -65,7 +63,7 @@ def compute_optimal_policy(
         V_up_arr = np.interp(W_up_arr, wealth_grid_next, v_t_next_jp1)
         V_down_arr = np.interp(W_down_arr, wealth_grid_next, v_t_next_j)
 
-        instant_util_arr = utility_function(c_cands)
+        instant_util_arr = crra_utility_numba(c_cands, gamma, epsilon)
         total_val_arr = instant_util_arr + beta * q_t * (
             p * V_up_arr + (1 - p) * V_down_arr
         )
@@ -101,9 +99,10 @@ class BinTreeOptimizer(StochasticOptimizerBase):
         w_step: float,
         c_step: float,
         use_cache: bool,
-        utility_function: UtilityFunction,
-        terminal_penalty: PenaltyFunction,
-        stochastic: bool
+        gamma: float,
+        epsilon: float,
+        stochastic: bool,
+        use_dynamic_grid: bool = False
     ) -> None:
         """
         Initialize the binomial tree Bellman optimizer.
@@ -129,8 +128,12 @@ class BinTreeOptimizer(StochasticOptimizerBase):
         self.use_cache = use_cache
         self.cache = ResultCache(run_id=run_config_id, enabled=self.use_cache)
 
-        self.utility_function = utility_function
-        self.terminal_penalty = terminal_penalty
+        self.gamma = gamma
+        self.epsilon = epsilon
+
+        self.terminal_penalty = square_penalty
+
+        self.use_dynamic_grid = use_dynamic_grid
 
         # Compute binomial parameters
         self._compute_binomial_params()
@@ -165,12 +168,21 @@ class BinTreeOptimizer(StochasticOptimizerBase):
         Results are stored in self.value_function and self.policy keyed by date.
         Handles binomial tree structure for risky asset and survival probabilities.
         """
+        self.value_function = {}
+        self.policy = {}
+
         n_t = self.n_months
 
         # -------------------------
         # Initialize terminal value
         # -------------------------
-        v_terminal = self.terminal_penalty(self.wealth_grid)
+        wealth_grid = (
+            self.dynamic_wealth_grid[-1]
+            if self.use_dynamic_grid
+            else self.wealth_grid
+        )
+
+        v_terminal = self.terminal_penalty(wealth_grid)
         v_t_next = np.array([v_terminal.copy() for _ in range(n_t)])
 
         # -------------------------
@@ -202,19 +214,29 @@ class BinTreeOptimizer(StochasticOptimizerBase):
 
             n_s = t + 1  # number of stock nodes at this time
 
-            n_w = len(self.wealth_grid)
+            wealth_grid = (
+                self.dynamic_wealth_grid[t]
+                if self.use_dynamic_grid
+                else self.wealth_grid
+            )
+
+            n_w = len(wealth_grid)
 
             v_t = np.zeros((n_s, n_w), dtype=np.float32)
             policy_t = np.zeros((n_s, n_w), dtype=np.float32)
 
             results = []
 
-            self.wealth_grid_next = self.wealth_grid
+            wealth_grid_next = (
+                self.dynamic_wealth_grid[t + 1]
+                if self.use_dynamic_grid
+                else self.wealth_grid
+            )
 
             for j in range(n_s):
                 results.append(
                     compute_optimal_policy(
-                        self.wealth_grid,
+                        wealth_grid,
                         self.u,
                         self.d,
                         self.p,
@@ -224,9 +246,9 @@ class BinTreeOptimizer(StochasticOptimizerBase):
                         q_t,
                         cf_t,
                         self.c_step,
-                        self.wealth_grid_next,
-                        self.monthly_return,
-                        self.utility_function
+                        wealth_grid_next,
+                        self.gamma,
+                        self.epsilon
                     )
                 )
 
@@ -271,7 +293,7 @@ class BinTreeOptimizer(StochasticOptimizerBase):
 
         wealth_grid = (
             self.dynamic_wealth_grid[0]
-            if self.use_dynamic_wealth_grid
+            if self.use_dynamic_grid
             else self.wealth_grid
         )
 
@@ -310,7 +332,7 @@ class BinTreeOptimizer(StochasticOptimizerBase):
 
                 wealth_grid = (
                     self.dynamic_wealth_grid[t]
-                    if self.use_dynamic_wealth_grid
+                    if self.use_dynamic_grid
                     else self.wealth_grid
                 )
 

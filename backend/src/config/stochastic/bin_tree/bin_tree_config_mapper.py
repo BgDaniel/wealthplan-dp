@@ -1,14 +1,10 @@
 from typing import Any, Dict
 
 
-from config.config_mapper import KEY_FUNCTIONS, KEY_UTILITY_FUNCTION, KEY_TERMINAL_PENALTY, KEY_SIMULATION, \
+from config.config_mapper import KEY_SIMULATION, \
     KEY_USE_CACHE, KEY_TECHNICAL, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
-from config.stochastic.neural_agent.neural_agent_config_mapper import KEY_GBM_SEED
 from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, KEY_STOCHASTIC
 
-from wealthplan.optimizer.math_tools.utility_functions import crra_utility_numba, \
-    log_utility_numba
-from wealthplan.optimizer.math_tools.penality_functions import square_penalty
 
 
 KEY_BETA: str = "beta"
@@ -63,17 +59,5 @@ class BinTreeConfigMapper(StochasticConfigMapper):
                 KEY_N_SIMS :  stochastic[KEY_N_SIMS]
             }
         )
-
-        # --- Functions ---
-        functions: Dict[str, Any] = data.get(KEY_FUNCTIONS, {})
-
-        # Map penalty
-        penalty_config = functions.get(KEY_TERMINAL_PENALTY, {})
-        penalty_type = penalty_config.get("type", "square").lower()
-
-        if penalty_type == "square":
-            params[KEY_TERMINAL_PENALTY] = square_penalty
-        else:
-            raise ValueError(f"Unknown penalty type: {penalty_type}")
 
         return params

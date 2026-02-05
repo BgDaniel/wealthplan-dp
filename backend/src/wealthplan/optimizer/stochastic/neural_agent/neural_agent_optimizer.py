@@ -9,6 +9,7 @@ from tqdm import trange
 
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.optimizer.math_tools.utility_functions import crra_utility_numba
 from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import (
     SimplePolicyNetwork,
 )
@@ -19,7 +20,7 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
     SurvivalProcess,
 )
 
-EPS: float = 10e-5
+EPS: float = 10e-7
 
 
 class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
@@ -47,11 +48,14 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         cashflows: List[CashflowBase],
         gbm_returns: GBM,
         survival_model: SurvivalModel,
-        utility_function: Callable[[np.ndarray], np.ndarray],
+        gamma: float,
+        epsilon: float,
         stochastic: bool,
         lr: float,
         device: str,
         saving_min: float,
+        buy_pct: float,
+        sell_pct: float,
         max_wealth_factor: float = 2.0,
     ) -> None:
         """
@@ -96,7 +100,8 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
         self.gbm_returns: GBM = gbm_returns
 
-        self.utility_function: Callable[[np.ndarray], np.ndarray] = utility_function
+        self.gamma = gamma
+        self.epsilon = epsilon
 
         self.device: str = device
 
@@ -105,6 +110,10 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         self.optimizer: optim.Adam = optim.Adam(self.policy_net.parameters(), lr=lr)
 
         self.saving_min: float = saving_min
+
+        self.buy_pct = buy_pct
+        self.sell_pct = sell_pct
+
         self.max_wealth_factor: float = max_wealth_factor
 
     def _build_state_tensor(
@@ -289,6 +298,8 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         wealth_paths[0] = savings_paths[0]  # initial wealth, stocks are zero
 
         for t in range(1, self.n_months):
+            alive_mask = survival_paths[t, :] == 1
+
             # ----------------------------
             # Compute deterministic cashflows for this month
             # ----------------------------
@@ -341,6 +352,24 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             stocks_after_rebalancing = (
                 total_available_wealth_after_consumption - savings_after_rebalancing
             )
+
+            # ----------------------------
+            # Apply transaction costs
+            # ----------------------------
+            delta_stocks = stocks_after_rebalancing - stocks_paths[t - 1]
+
+            buy_mask = delta_stocks > 0
+            sell_mask = delta_stocks < 0
+
+            stocks_after_rebalancing[buy_mask] -= delta_stocks[buy_mask] * self.buy_pct / 100.0
+            stocks_after_rebalancing[sell_mask] -= (-delta_stocks[sell_mask]) * self.sell_pct / 100.0
+
+            # Zero consumption for dead agents
+            consumption[~alive_mask] = 0.0
+
+            # Keep previous savings/stocks for dead agents
+            savings_after_rebalancing[~alive_mask] = savings_paths[t - 1, ~alive_mask]
+            stocks_after_rebalancing[~alive_mask] = stocks_paths[t - 1, ~alive_mask]
 
             # check constraints
             if np.any(savings_after_rebalancing < self.saving_min):
@@ -410,8 +439,8 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
                 total_reward = 0.0
 
                 for t in range(self.n_months):
-                    total_reward += self.utility_function(
-                        consumption_paths[t, :]
+                    total_reward += crra_utility_numba(
+                        consumption_paths[t, :], self.gamma, self.epsilon
                     ).mean()
 
                 # accumulate rewards for plotting

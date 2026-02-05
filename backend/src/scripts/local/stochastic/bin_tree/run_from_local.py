@@ -48,9 +48,9 @@ def main(
     bin_tree_optimizer.backward_induction()
     bin_tree_optimizer.roll_forward()
 
-    io_handler.save_results(results=bin_tree_optimizer.opt_results,
-                            run_config_id=bin_tree_optimizer.run_config_id,
-                            run_task_id=run_task_id)
+    #io_handler.save_results(results=bin_tree_optimizer.opt_results,
+    #                        run_config_id=bin_tree_optimizer.run_config_id,
+    #                        run_task_id=run_task_id)
 
     if plot:
         bin_tree_optimizer.plot()

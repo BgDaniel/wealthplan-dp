@@ -31,6 +31,13 @@ KEY_UTILITY_PARAMS: str = "params"
 KEY_UTILITY_GAMMA: str = "gamma"
 KEY_UTILITY_EPSILON: str = "epsilon"
 
+# ----------------------
+# Transaction cost keys
+# ----------------------
+KEY_TRANSACTION_COSTS: str = "transaction_costs"
+KEY_TRANSACTION_BUY_PCT: str = "buy_pct"
+KEY_TRANSACTION_SELL_PCT: str = "sell_pct"
+
 
 class NeuralAgentConfigMapper(StochasticConfigMapper):
     """
@@ -101,6 +108,20 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
                 KEY_DEVICE: device,
                 KEY_SAVING_MIN: saving_min,
                 KEY_MAX_WEALTH_FACTOR: max_wealth_factor
+            }
+        )
+
+        # ----------------------
+        # Transaction costs
+        # ----------------------
+        transaction_cfg: Dict[str, Any] = data.get(KEY_TRANSACTION_COSTS, {})
+        buy_pct: float = transaction_cfg.get(KEY_TRANSACTION_BUY_PCT, 0.0)  # default 0%
+        sell_pct: float = transaction_cfg.get(KEY_TRANSACTION_SELL_PCT, 0.0)  # default 0%
+
+        params.update(
+            {
+                KEY_TRANSACTION_BUY_PCT: buy_pct,
+                KEY_TRANSACTION_SELL_PCT: sell_pct
             }
         )
 

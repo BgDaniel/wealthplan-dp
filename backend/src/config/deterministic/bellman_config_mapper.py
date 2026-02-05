@@ -1,10 +1,8 @@
 from typing import Dict, Any
 
-from config.config_mapper import ConfigMapper, KEY_FUNCTIONS, KEY_UTILITY_FUNCTION, KEY_TERMINAL_PENALTY, \
+from config.config_mapper import ConfigMapper, \
     KEY_SIMULATION, KEY_BETA, KEY_USE_CACHE, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
-from wealthplan.optimizer.math_tools.penality_functions import square_penalty
-from wealthplan.optimizer.math_tools.utility_functions import crra_utility_numba, \
-    log_utility_numba
+
 
 KEY_TECHNICAL: str = "technical"
 
@@ -44,16 +42,5 @@ class BellmanConfigMapper(ConfigMapper):
             KEY_C_STEP: technical[KEY_C_STEP],
             KEY_USE_CACHE: technical[KEY_USE_CACHE],
         })
-
-        # --- Functions ---
-        functions: Dict[str, Any] = data.get(KEY_FUNCTIONS, {})
-
-        # Map penalty
-        penalty_config = functions.get(KEY_TERMINAL_PENALTY, {})
-        penalty_type = penalty_config.get("type", "square").lower()
-        if penalty_type == "square":
-            params[KEY_TERMINAL_PENALTY] = square_penalty
-        else:
-            raise ValueError(f"Unknown penalty type: {penalty_type}")
 
         return params

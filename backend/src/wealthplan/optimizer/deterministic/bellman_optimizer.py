@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from result_cache.result_cache import VALUE_FUNCTION_KEY, POLICY_KEY, ResultCache
 from wealthplan.cashflows.cashflow_base import CashflowBase
-from wealthplan.optimizer.math_tools.penality_functions import PenaltyFunction
+from wealthplan.optimizer.math_tools.penality_functions import PenaltyFunction, square_penalty
 from wealthplan.optimizer.math_tools.utility_functions import (
     crra_utility_numba, UtilityFunction,
 )
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @njit(parallel=True)
-def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step, utility_func):
+def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step, gamma, epsilon):
     n_w = wealth_grid.shape[0]
 
     v_opt = np.zeros(n_w, dtype=np.float32)
@@ -39,7 +39,7 @@ def compute_optimal_policy(wealth_grid, r, beta, v_t_next, cf_t, c_step, utility
         W_next = (W + cf_t - c_cands) * (1.0 + r)
         V_next = np.interp(W_next, wealth_grid, v_t_next)
 
-        instant_util_arr = utility_func(c_cands)
+        instant_util_arr = crra_utility_numba(c_cands, gamma, epsilon)
         total_val_arr = instant_util_arr + beta * V_next
 
         idx_max = np.argmax(total_val_arr)
@@ -63,8 +63,8 @@ class BellmanOptimizer(OptimizerBase):
                  yearly_return: float,
                  beta: float,
                  cashflows: List[CashflowBase],
-                 utility_function: UtilityFunction,
-                 terminal_penalty: PenaltyFunction,
+                 gamma: float,
+                 epsilon: float,
                  w_max: float,
                  w_step: float,
                  c_step: float,
@@ -76,8 +76,10 @@ class BellmanOptimizer(OptimizerBase):
 
         self.beta = beta
 
-        self.utility_function = utility_function
-        self.terminal_penalty = terminal_penalty
+        self.gamma = gamma
+        self.epsilon = epsilon
+
+        self.terminal_penalty = square_penalty
 
         self.w_max = w_max
         self.w_step = w_step
@@ -134,7 +136,8 @@ class BellmanOptimizer(OptimizerBase):
                 v_t_next,
                 cf_t,
                 self.c_step,
-                self.utility_function
+                self.gamma,
+                self.epsilon
             )
 
             # Store results

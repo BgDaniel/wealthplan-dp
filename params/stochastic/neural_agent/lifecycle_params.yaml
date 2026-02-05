@@ -106,9 +106,12 @@ neural_agent:
   saving_min: 200.0
   max_wealth_factor: 5.0
 
-instant_utility:
-  type: "crra"
-  params:
-    gamma: 0.5
-    epsilon: 1e-8
+utility_function:
+  gamma: 0.5
+  epsilon: 1e-8
+
+transaction_costs:
+  buy_pct: 1.5
+  sell_pct: 1.0
+
 
