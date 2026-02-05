@@ -209,5 +209,3 @@ __marimo__/
 # Cache folder for BellmanOptimizer
 cache/
 
-params/
-

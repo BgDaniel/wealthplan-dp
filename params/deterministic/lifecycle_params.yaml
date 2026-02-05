@@ -1,0 +1,91 @@
+# ----------------------------
+# Simulation parameters for lifecycle financial planning
+# ----------------------------
+simulation_parameters:
+  run_config_id: "deterministic"
+  initial_wealth: 145000.0
+  start_date: 2026-01-01
+  end_date: 2081-01-01
+  retirement_date: 2055-07-01
+  yearly_return: 0.04
+  beta: 0.999
+
+# ----------------------------
+# Lifecycle cashflows
+# ----------------------------
+lifecycle:
+  # Regular cashflows
+  salary:
+    monthly_amount: 6800
+    retirement_date: 2055-07-01
+
+  rent:
+    monthly_amount: 1100
+
+  electricity:
+    monthly_amount: 16
+
+  telecommunication:
+    monthly_amount: 80
+
+  groceries:
+    monthly_amount: 600
+
+  # Insurances
+  insurances:
+    - name: "Private Liability"
+      amount: 50
+      frequency: "Y"
+    - name: "Dental Supplemental"
+      amount: 40
+      frequency: "M"
+    - name: "Private accident"
+      amount: 160
+      frequency: "Y"
+    - name: "Household Contents"
+      amount: 90
+      frequency: "Y"
+    - name: "Disability"
+      amount: 56
+      frequency: "M"
+
+# ----------------------------
+# Total pension (aggregated & taxed together)
+# ----------------------------
+total_pension:
+  retirement_date: 2055-07-01
+
+  private_pension_plans:
+    - name: "Company Pension Plan Uniper"
+      monthly_contribution: 0
+      monthly_payout_brutto: 30
+      taxable_earnings_share: 1.0
+
+    - name: "Private Pension Plan RuV"
+      monthly_contribution: 60
+      monthly_payout_brutto: 102
+      taxable_earnings_share: 0.18
+
+    - name: "Private Life Insurance RuV"
+      monthly_contribution: 137
+      monthly_payout_brutto: 190
+      taxable_earnings_share: 0.18
+
+    - name: "Private Pension Plan HUK"
+      initial_monthly_contribution: 114
+      monthly_payout_brutto: 334
+      taxable_earnings_share: 0.18
+      contribution_growth_rate: 0.05
+      start_date: 2026-01-01
+
+  public_pension_plan:
+    - monthly_payout_brutto: 3100
+
+# ----------------------------
+# Technical solver parameters
+# ----------------------------
+technical:
+  w_max: 1500000.0
+  w_step: 100.0
+  c_step: 100.0
+  use_cache: true

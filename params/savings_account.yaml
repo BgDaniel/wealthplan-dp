@@ -1,0 +1,36 @@
+# ----------------------------
+# Simulation parameters for lifecycle financial planning
+# ----------------------------
+simulation_parameters:
+  run_config_id: "savings_account"
+  initial_wealth: 145000.0
+  start_date: 2026-01-01
+  end_date: 2046-01-01
+  retirement_date: 2055-07-01
+  yearly_return: 0.04
+  beta: 0.999
+
+# ----------------------------
+# Lifecycle cashflows
+# ----------------------------
+lifecycle:
+  # Regular cashflows
+  salary:
+    monthly_amount: 1000
+    retirement_date: 2055-07-01
+
+# ----------------------------
+# Total pension (aggregated & taxed together)
+# ----------------------------
+total_pension:
+  retirement_date: 2055-07-01
+
+
+# ----------------------------
+# Technical solver parameters
+# ----------------------------
+technical:
+  w_max: 1500000.0
+  w_step: 100.0
+  c_step: 100.0
+  use_cache: true
