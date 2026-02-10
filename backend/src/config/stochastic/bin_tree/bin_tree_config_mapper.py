@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 
 from config.config_mapper import KEY_SIMULATION, \
-    KEY_USE_CACHE, KEY_TECHNICAL, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
+    KEY_TECHNICAL, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
 from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, KEY_STOCHASTIC
 
 
@@ -46,8 +46,7 @@ class BinTreeConfigMapper(StochasticConfigMapper):
         params.update({
             KEY_W_MAX: technical[KEY_W_MAX],
             KEY_W_STEP: technical[KEY_W_STEP],
-            KEY_C_STEP: technical[KEY_C_STEP],
-            KEY_USE_CACHE: technical[KEY_USE_CACHE],
+            KEY_C_STEP: technical[KEY_C_STEP]
         })
 
         stochastic: Dict[str, Any] = data[KEY_STOCHASTIC]

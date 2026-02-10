@@ -288,9 +288,7 @@ class StochasticOptimizerBase(OptimizerBase):
         axes[2].tick_params(axis="both", labelsize=tick_size)
 
         # --- 4. Survival probability ---
-        cumulative_survival = np.cumprod(self.survival_probabilities)
-
-        axes[3].plot(self.age_grid, cumulative_survival, color="tab:orange", lw=2)
+        axes[3].plot(self.age_grid, self.survival_probabilities, color="tab:orange", lw=2)
         axes[3].set_title("Survival Probability", fontsize=title_size)
         axes[3].set_ylim(0.0, 1.05)
         axes[3].grid(True)

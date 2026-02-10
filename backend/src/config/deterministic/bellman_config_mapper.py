@@ -1,7 +1,7 @@
 from typing import Dict, Any
 
 from config.config_mapper import ConfigMapper, \
-    KEY_SIMULATION, KEY_BETA, KEY_USE_CACHE, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
+    KEY_SIMULATION, KEY_BETA, KEY_W_MAX, KEY_W_STEP, KEY_C_STEP
 
 
 KEY_TECHNICAL: str = "technical"
@@ -40,7 +40,6 @@ class BellmanConfigMapper(ConfigMapper):
             KEY_W_MAX: technical[KEY_W_MAX],
             KEY_W_STEP: technical[KEY_W_STEP],
             KEY_C_STEP: technical[KEY_C_STEP],
-            KEY_USE_CACHE: technical[KEY_USE_CACHE],
         })
 
         return params

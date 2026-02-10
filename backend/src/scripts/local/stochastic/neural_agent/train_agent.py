@@ -2,6 +2,10 @@
 import os
 import uuid
 from typing import Dict
+import datetime as dt
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 import torch
 import torch.nn as nn
@@ -70,6 +74,90 @@ def _prepare_output_dir(run_task_id: str) -> str:
     return run_dir
 
 
+def plot_policy_heatmaps(
+    agent: NeuralAgentWealthOptimizer,
+    inspection_date: dt.date,
+    n_wealth: int = 500,
+    n_savings_frac: int = 500,
+):
+    """
+    Plot the trained neural network policy as heatmaps for consumption and savings actions.
+
+    Parameters
+    ----------
+    agent : NeuralAgentWealthOptimizer
+        Trained agent with policy_net.
+    inspection_date : dt.date
+        Date to evaluate the policy (fixes time dimension). Defaults to first simulation month.
+    n_wealth : int
+        Grid points for total wealth.
+    n_savings_frac : int
+        Grid points for savings fraction.
+    """
+    # default to first month if no date provided
+    t_idx = np.where(np.array(agent.months) == inspection_date)[0]
+
+    if len(t_idx) == 0:
+        raise ValueError(f"inspection_date {inspection_date} not in agent.months")
+
+    t_idx = t_idx[0]
+
+    # Create grid
+    wealth_scaled_grid = np.linspace(0.0, agent.max_wealth_factor, n_wealth)
+    savings_frac_grid = np.linspace(0.0, 1.0, n_savings_frac)
+    W_scaled, S_frac = np.meshgrid(wealth_scaled_grid, savings_frac_grid)
+
+    # Flatten for batch
+    W_flat = W_scaled.ravel()
+    S_frac_flat = S_frac.ravel()
+
+    # Normalized time feature
+    t_norm = np.full_like(W_flat, fill_value=t_idx / agent.n_months, dtype=np.float32)
+
+    # Build state tensor directly (3 features: savings_frac, wealth_scaled, t_norm)
+    state_tensor = torch.from_numpy(
+        np.stack([S_frac_flat, W_flat, t_norm], axis=1)
+    ).float()
+
+    # Move to device
+    state_tensor = state_tensor.to(next(agent.policy_net.parameters()).device)
+
+    # Actions from policy network
+    actions = agent.policy_net(state_tensor).detach().cpu().numpy()
+    consumption_rate = actions[:, 0].reshape(n_savings_frac, n_wealth)
+    savings_rate = actions[:, 1].reshape(n_savings_frac, n_wealth)
+
+    # Plot heatmaps
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    im0 = axes[0].imshow(
+        consumption_rate,
+        origin="lower",
+        extent=[0.0, agent.max_wealth_factor, 0, 1],
+        aspect="auto",
+        cmap="viridis",
+    )
+    axes[0].set_xlabel("Wealth (scaled)")
+    axes[0].set_ylabel("Savings Fraction")
+    axes[0].set_title("Policy: Consumption Rate")
+    fig.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(
+        savings_rate,
+        origin="lower",
+        extent=[0.0, agent.max_wealth_factor, 0, 1],
+        aspect="auto",
+        cmap="plasma",
+    )
+    axes[1].set_xlabel("Wealth (scaled)")
+    axes[1].set_ylabel("Savings Fraction")
+    axes[1].set_title("Policy: Savings Transfer Rate")
+    fig.colorbar(im1, ax=axes[1])
+
+    plt.tight_layout()
+    plt.show()
+
+
 def train_agent(
     hyperparams: Dict[str, object],
     params_file_name: str,
@@ -136,7 +224,7 @@ def train_agent(
     # Train agent
     # ----------------------------
     agent.train(
-        n_epochs=50,  # shortened for HPO / testing
+        n_epochs=10,  # shortened for HPO / testing
         batch_size=hyperparams[HP_BATCH_SIZE],
         n_batches=10,
         plot=plot_training,
@@ -146,19 +234,24 @@ def train_agent(
     # Save outputs
     # ----------------------------
     if save:
+        cache_dir = agent.cache.cache_dir
+
         torch.save(
             agent.policy_net.state_dict(),
-            os.path.join(run_dir, FILE_POLICY_NET),
+            os.path.join(cache_dir, FILE_POLICY_NET),
         )
-        agent.opt_savings.to_csv(os.path.join(run_dir, FILE_SAVINGS))
-        agent.opt_stocks.to_csv(os.path.join(run_dir, FILE_STOCKS))
-        agent.opt_consumption.to_csv(os.path.join(run_dir, FILE_CONSUMPTION))
+        agent.opt_savings.to_csv(os.path.join(cache_dir, FILE_SAVINGS))
+        agent.opt_stocks.to_csv(os.path.join(cache_dir, FILE_STOCKS))
+        agent.opt_consumption.to_csv(os.path.join(cache_dir, FILE_CONSUMPTION))
 
     # ----------------------------
     # Plot optimization results
     # ----------------------------
     if plot_results:
         agent.plot()
+
+        first_month_date = agent.months[0]  # or choose any date
+        plot_policy_heatmaps(agent, inspection_date=first_month_date)
 
     # ----------------------------
     # Objective
@@ -170,16 +263,16 @@ def train_agent(
 # Main section
 # ----------------------------
 if __name__ == "__main__":
-    PARAMS_FILE = "stochastic/neural_agent/lifecycle_params.yaml"
+    PARAMS_FILE = "stochastic/neural_agent/lifecycle_params_test.yaml"
     RUN_TASK_ID = uuid.uuid4().hex
     DEVICE = "cpu"
 
     hyperparams = {
-        HP_HIDDEN_LAYERS: [64, 64],
+        HP_HIDDEN_LAYERS: [64, 64, 64],
         HP_ACTIVATION: ACT_RELU,
         HP_DROPOUT: 0.1,
         HP_LR: 0.001,
-        HP_BATCH_SIZE: 1000,
+        HP_BATCH_SIZE: 10000,
     }
 
     obj = train_agent(
@@ -188,7 +281,7 @@ if __name__ == "__main__":
         run_task_id=RUN_TASK_ID,
         plot_training=True,
         plot_results=True,
-        save=False,
+        save=True,
         device=DEVICE,
     )
 

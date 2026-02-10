@@ -1,11 +1,7 @@
 from typing import Any, Dict
 
+from config.config_mapper import KEY_SIMULATION, KEY_USE_CACHE
 from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, KEY_STOCHASTIC
-from wealthplan.optimizer.math_tools.utility_functions import (
-    UtilityFunction,
-    crra_utility,
-    log_utility,
-)
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 
 KEY_GBM_RETURNS: str = "gbm_returns"
@@ -37,6 +33,8 @@ KEY_UTILITY_EPSILON: str = "epsilon"
 KEY_TRANSACTION_COSTS: str = "transaction_costs"
 KEY_TRANSACTION_BUY_PCT: str = "buy_pct"
 KEY_TRANSACTION_SELL_PCT: str = "sell_pct"
+
+KEY_INITIAL_SAVINGS_FRACTION: str = "initial_savings_fraction"
 
 
 class NeuralAgentConfigMapper(StochasticConfigMapper):
@@ -124,5 +122,7 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
                 KEY_TRANSACTION_SELL_PCT: sell_pct
             }
         )
+
+        params[KEY_INITIAL_SAVINGS_FRACTION]: float = data[KEY_SIMULATION].get(KEY_INITIAL_SAVINGS_FRACTION, 0.5)
 
         return params

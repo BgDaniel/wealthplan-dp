@@ -1,0 +1,71 @@
+# ----------------------------
+# Simulation parameters for lifecycle financial planning
+# ----------------------------
+simulation_parameters:
+  run_config_id: "neural_agent"
+  initial_wealth: 10000.0
+  start_date: 2026-01-01
+  end_date: 2031-01-01
+  current_age: 37
+  retirement_date: 2055-07-01
+  yearly_return: 0.04
+  initial_savings_fraction: 0.5
+
+# ----------------------------
+# Lifecycle cashflows
+# ----------------------------
+lifecycle:
+  # Regular cashflows
+  salary:
+    monthly_amount: 3000
+    retirement_date: 2055-07-01
+
+  rent:
+    monthly_amount: 750
+
+# ----------------------------
+# Total pension (aggregated & taxed together)
+# ----------------------------
+total_pension:
+  retirement_date: 2055-07-01
+
+  public_pension_plan:
+    - monthly_payout_brutto: 1500
+
+# ----------------------------
+# Stochastic optimizer parameters
+# ----------------------------
+stochastic:
+  stochastic: True
+
+  gbm_returns:
+    mu: 0.05
+    sigma: 0.4
+    seed: 42
+
+  survival_model:
+    b: 9.5e-5
+    c: 0.085
+    seed: 123
+
+# ----------------------------
+# Neural agent parameters
+# ----------------------------
+neural_agent:
+  lr: 0.001
+  device: "cpu"
+  saving_min: 200.0
+  max_wealth_factor: 5.0
+
+utility_function:
+  gamma: 0.5
+  epsilon: 1e-8
+
+transaction_costs:
+  buy_pct: 1.5
+  sell_pct: 1.0
+
+technical:
+  use_cache: true
+
+

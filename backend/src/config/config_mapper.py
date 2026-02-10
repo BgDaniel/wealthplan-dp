@@ -85,6 +85,9 @@ KEY_C_STEP: str = "c_step"
 KEY_GAMMA: str = "gamma"
 KEY_EPSILON: str = "epsilon"
 
+KEY_USE_CACHE: str = "use_cache"
+
+
 class ConfigMapper:
     """
     Base mapper that converts YAML configuration dictionaries into
@@ -124,6 +127,8 @@ class ConfigMapper:
         # Load utility function
         # ----------------------
         params.update(cls._load_crra_params(data))
+
+        params[KEY_USE_CACHE] = data[KEY_TECHNICAL].get(KEY_USE_CACHE, False)
 
         return params
 

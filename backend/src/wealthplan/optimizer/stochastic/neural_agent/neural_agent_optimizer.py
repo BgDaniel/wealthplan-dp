@@ -7,20 +7,23 @@ import torch.optim as optim
 from matplotlib import pyplot as plt
 from tqdm import trange
 
-
+from result_cache.result_cache import ResultCache
 from wealthplan.cashflows.cashflow_base import CashflowBase
+from wealthplan.optimizer.math_tools.penality_functions import square_penalty
 from wealthplan.optimizer.math_tools.utility_functions import crra_utility_numba
 from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import (
     SimplePolicyNetwork,
 )
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 from wealthplan.optimizer.stochastic.stochastic_optimizer import StochasticOptimizerBase
-from wealthplan.optimizer.stochastic.survival_process.survival_model import SurvivalModel
+from wealthplan.optimizer.stochastic.survival_process.survival_model import (
+    SurvivalModel,
+)
 from wealthplan.optimizer.stochastic.survival_process.survival_process import (
     SurvivalProcess,
 )
 
-EPS: float = 10e-7
+EPS: float = 10e-1
 
 
 class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
@@ -56,7 +59,9 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         saving_min: float,
         buy_pct: float,
         sell_pct: float,
-        max_wealth_factor: float = 2.0,
+        max_wealth_factor: float,
+        initial_savings_fraction: float,
+        use_cache: bool
     ) -> None:
         """
         Initialize the neural agent optimizer.
@@ -93,10 +98,18 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             Vectorized instantaneous utility function.
         """
 
-        super().__init__(run_config_id=run_config_id, start_date=start_date, end_date=end_date,
-                                       retirement_date=retirement_date, initial_wealth=initial_wealth,
-                                       yearly_return=yearly_return, cashflows=cashflows, survival_model=survival_model,
-                                        current_age=current_age, stochastic=stochastic)
+        super().__init__(
+            run_config_id=run_config_id,
+            start_date=start_date,
+            end_date=end_date,
+            retirement_date=retirement_date,
+            initial_wealth=initial_wealth,
+            yearly_return=yearly_return,
+            cashflows=cashflows,
+            survival_model=survival_model,
+            current_age=current_age,
+            stochastic=stochastic,
+        )
 
         self.gbm_returns: GBM = gbm_returns
 
@@ -115,6 +128,32 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         self.sell_pct = sell_pct
 
         self.max_wealth_factor: float = max_wealth_factor
+
+        self.max_allowed_wealth = (
+            self.max_wealth_factor * (self.initial_wealth - self.saving_min)
+            + self.saving_min
+        )
+
+        self.initial_savings_fraction = initial_savings_fraction
+
+        self.terminal_penalty = square_penalty
+
+        self.use_cache = use_cache
+        self.cache = ResultCache(run_id=run_config_id, enabled=self.use_cache)
+
+    def _get_wealth_scaled(self, wealth: np.ndarray) -> np.ndarray:
+        return (wealth - self.saving_min) / (self.initial_wealth - self.saving_min)
+
+    def _get_savings_fraction(
+        self, savings: np.ndarray, wealth: np.ndarray
+    ) -> np.ndarray:
+        return (savings - self.saving_min) / (wealth - self.saving_min)
+
+    def _get_stocks_fraction(
+        self, stocks: np.ndarray, wealth: np.ndarray
+    ) -> np.ndarray:
+        return stocks / (wealth - self.saving_min)
+
 
     def _build_state_tensor(
         self, available_savings: np.ndarray, available_stocks: np.ndarray, t: int
@@ -142,9 +181,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         """
         total_wealth = available_savings + available_stocks
 
-        savings_frac = (available_savings - self.saving_min) / (
-            total_wealth - self.saving_min
-        )
+        savings_frac = self._get_savings_fraction(available_savings, total_wealth)
 
         # Validate fractions are within [0, 1]
         if np.any(savings_frac < -EPS) or np.any(savings_frac > 1.0 + EPS):
@@ -155,9 +192,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             )
 
         # Min-max scaled absolute wealth
-        wealth_scaled = (total_wealth - self.saving_min) / (
-            self.initial_wealth - self.saving_min
-        )
+        wealth_scaled = self._get_wealth_scaled(total_wealth)
 
         if np.any(wealth_scaled > self.max_wealth_factor + EPS):
             offending = wealth_scaled[wealth_scaled > self.max_wealth_factor + EPS]
@@ -207,22 +242,20 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         """
         # Compute scaled total wealth
         total_wealth = savings + stocks
-        wealth_scaled = (total_wealth - self.saving_min) / (
-            self.initial_wealth - self.saving_min
-        )
 
         # Identify paths exceeding max wealth factor
-        mask_exceed = wealth_scaled > self.max_wealth_factor
+        mask_exceed = total_wealth > self.max_allowed_wealth
 
         if np.any(mask_exceed):
-            # Excess in **scaled wealth units**
-            excess_scaled = wealth_scaled[mask_exceed] - self.max_wealth_factor
-            # Convert back to raw wealth excess
-            excess = excess_scaled * (self.initial_wealth - self.saving_min)
+            excess = total_wealth[mask_exceed] - self.max_allowed_wealth
 
             # Compute fraction of wealth in savings/stocks
-            frac_savings = savings[mask_exceed] / total_wealth[mask_exceed]
-            frac_stocks = stocks[mask_exceed] / total_wealth[mask_exceed]
+            frac_savings = self._get_savings_fraction(
+                savings[mask_exceed], total_wealth[mask_exceed]
+            )
+            frac_stocks = self._get_stocks_fraction(
+                stocks[mask_exceed], total_wealth[mask_exceed]
+            )
 
             # Increase consumption
             consumption[mask_exceed] += excess
@@ -235,9 +268,6 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         savings = np.maximum(savings, self.saving_min)
         stocks = np.maximum(stocks, 0.0)
         total_wealth = savings + stocks
-        wealth_scaled = (total_wealth - self.saving_min) / (
-            self.initial_wealth - self.saving_min
-        )
 
         if np.any(savings < self.saving_min - EPS):
             raise ValueError(
@@ -249,9 +279,13 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
                 f"Some stocks are negative (eps={EPS}): {stocks[stocks < -EPS]}"
             )
 
-        if np.any(wealth_scaled > self.max_wealth_factor + EPS):
+        if np.any(total_wealth > self.max_allowed_wealth + EPS):
+            offending = total_wealth[total_wealth > self.max_allowed_wealth + EPS]
+
             raise ValueError(
-                f"Scaled total wealth exceeds maximum allowed (eps={EPS}): {wealth_scaled[wealth_scaled > self.max_wealth_factor + EPS]}"
+                f"Total wealth exceeds the maximum allowed wealth.\n"
+                f"Max allowed wealth: {self.max_allowed_wealth}\n"
+                f"Offending total wealth values: {offending}"
             )
 
         return savings, stocks, consumption
@@ -289,13 +323,27 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         )
 
         savings_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
-        savings_paths[0] = np.full(batch_size, self.initial_wealth)
+        savings_paths[0] = np.full(
+            batch_size,
+            self.initial_wealth * self.initial_savings_fraction,
+            dtype=np.float32,
+        )
 
         stocks_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
+        stocks_paths[0] = np.full(
+            batch_size,
+            self.initial_wealth * (1.0 - self.initial_savings_fraction),
+            dtype=np.float32,
+        )
+
         consumption_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
 
         wealth_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
-        wealth_paths[0] = savings_paths[0]  # initial wealth, stocks are zero
+        wealth_paths[0] = np.full(
+            batch_size,
+            self.initial_wealth,
+            dtype=np.float32,
+        )
 
         for t in range(1, self.n_months):
             alive_mask = survival_paths[t, :] == 1
@@ -361,8 +409,12 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             buy_mask = delta_stocks > 0
             sell_mask = delta_stocks < 0
 
-            stocks_after_rebalancing[buy_mask] -= delta_stocks[buy_mask] * self.buy_pct / 100.0
-            stocks_after_rebalancing[sell_mask] -= (-delta_stocks[sell_mask]) * self.sell_pct / 100.0
+            stocks_after_rebalancing[buy_mask] -= (
+                delta_stocks[buy_mask] * self.buy_pct / 100.0
+            )
+            stocks_after_rebalancing[sell_mask] -= (
+                (-delta_stocks[sell_mask]) * self.sell_pct / 100.0
+            )
 
             # Zero consumption for dead agents
             consumption[~alive_mask] = 0.0
@@ -431,8 +483,8 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
             for batch_idx in range(n_batches):
                 # simulate batch_size paths
-                savings_paths, stocks_paths, consumption_paths, wealth_paths = self._simulate_forward(
-                    batch_size=batch_size
+                savings_paths, stocks_paths, consumption_paths, wealth_paths = (
+                    self._simulate_forward(batch_size=batch_size)
                 )
 
                 # compute reward
@@ -442,6 +494,30 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
                     total_reward += crra_utility_numba(
                         consumption_paths[t, :], self.gamma, self.epsilon
                     ).mean()
+
+                # ----------------------------
+                # Apply pathwise terminal penalty
+                # ----------------------------
+                # survival paths for this batch
+                survival_paths = self.survival_model.simulate_survival(
+                    age_t=self.age_grid, dt=self.dt, n_sims=batch_size
+                )
+
+                terminal_wealth = np.zeros(batch_size, dtype=np.float32)
+
+                for i in range(batch_size):
+                    # find first timestep agent dies
+                    death_indices = np.where(survival_paths[:, i] == 0)[0]
+                    if death_indices.size > 0:
+                        death_t = death_indices[0]
+                        terminal_wealth[i] = wealth_paths[death_t, i]
+                    else:
+                        # survived entire simulation
+                        terminal_wealth[i] = wealth_paths[-1, i]
+
+                # apply penalty to terminal wealth
+                penalty = self.terminal_penalty(terminal_wealth)
+                total_reward += penalty.mean()
 
                 # accumulate rewards for plotting
                 batch_rewards.append(total_reward.item())
