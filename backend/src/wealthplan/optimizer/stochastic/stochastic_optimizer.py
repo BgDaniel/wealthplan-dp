@@ -1,6 +1,6 @@
 import logging
 import datetime as dt
-from typing import List, Optional
+from typing import List, Optional, OrderedDict
 import numpy as np
 import pandas as pd
 from abc import abstractmethod
@@ -38,7 +38,7 @@ class StochasticOptimizerBase(OptimizerBase):
         end_date: dt.date,
         retirement_date: dt.date,
         initial_wealth: float,
-        yearly_return: float,
+        yearly_return_savings: float,
         cashflows: List[CashflowBase],
         survival_model: SurvivalModel,
         current_age: int,
@@ -51,7 +51,7 @@ class StochasticOptimizerBase(OptimizerBase):
             end_date=end_date,
             retirement_date=retirement_date,
             initial_wealth=initial_wealth,
-            yearly_return=yearly_return,
+            yearly_return_savings=yearly_return_savings,
             cashflows=cashflows,
         )
         self.survival_model: SurvivalModel = survival_model
@@ -103,52 +103,18 @@ class StochasticOptimizerBase(OptimizerBase):
 
         return mean, bands
 
-    @staticmethod
-    def plot_with_bands(
-        ax,
-        x,
-        mean,
-        bands,
-        color,
-        title,
-        title_size=22,
-        legend_size=16,
-        tick_size=16,
-        yfmt=False,
+    def _create_plot(
+            self,
+            percentiles=(5, 10),
+            sample_sim=None,
+            title_size=22,
+            tick_size=14,
     ):
         """
-        Plot mean + percentile bands on a given axis.
-        """
-        all_values = [mean]
-
-        for i, (p, (lo, hi)) in enumerate(bands.items()):
-            ax.fill_between(
-                x, lo, hi, color=color, alpha=0.15 + 0.15 * i, label=f"{p}-{100-p}%"
-            )
-            all_values.extend([lo, hi])
-
-        ax.plot(x, mean, color=color, lw=2, linestyle="--", label="Mean")
-        all_values = np.concatenate([np.ravel(v) for v in all_values])
-
-        ymin, ymax = np.min(all_values), np.max(all_values)
-        ymin *= 0.9 if ymin >= 0 else 1.1
-        ymax *= 1.1 if ymax >= 0 else 0.9
-
-        ax.set_ylim(ymin, ymax)
-        ax.set_title(title, fontsize=title_size)
-        ax.legend(fontsize=legend_size)
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis="both", labelsize=tick_size)
-
-        if yfmt:
-            from matplotlib.ticker import FuncFormatter
-
-            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-
-    def _create_plot(self, percentiles=(5,10), sample_sim=None, title_size=22, legend_size=16, tick_size=16):
-        """
-        Creates figure and axes with base plots: consumption, wealth, investment, survival.
-        Returns fig, axes (does NOT call plt.show())
+        Base figure and axes with:
+        1. Consumption + Survival probability
+        2. Wealth
+        3. Investment / Withdrawal
         """
         if self.opt_wealth is None or self.opt_consumption is None:
             raise RuntimeError("No solution available — call solve() or train() first.")
@@ -156,10 +122,9 @@ class StochasticOptimizerBase(OptimizerBase):
         months = self.months
         n_sims = len(self.opt_wealth.columns)
         if sample_sim is None:
-            np.random.seed()
             sample_sim = np.random.randint(n_sims)
 
-        # Compute mean and bands
+        # Compute mean + bands
         cons_mean, cons_bands = self.compute_mean_and_bands(self.opt_consumption, percentiles)
         wealth_mean, wealth_bands = self.compute_mean_and_bands(self.opt_wealth, percentiles)
         inv_df = self.cf[:, np.newaxis] - self.opt_consumption.values
@@ -170,41 +135,74 @@ class StochasticOptimizerBase(OptimizerBase):
         wealth_sample = self.opt_wealth.iloc[:, sample_sim]
         inv_sample = inv_df.iloc[:, sample_sim]
 
-        # Create figure
-        fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=False)
+        # --- figure and axes ---
+        fig, axes = plt.subplots(3, 1, figsize=(14, 14), sharex=False)
 
-        # Plot consumption
-        self.plot_with_bands(axes[0], months, cons_mean, cons_bands, color="tab:green",
-                              title="Optimal Consumption Over Time", title_size=title_size,
-                              legend_size=legend_size, tick_size=tick_size, yfmt=True)
-        axes[0].plot(months, cons_sample.values, color="red", lw=1.0, alpha=0.8, label="Sample Path")
-        axes[0].plot(months, self.cf, color="blue", linestyle="--", lw=1.0, label="Deterministic Cashflows")
-        axes[0].legend(fontsize=legend_size)
+        # 1️⃣ Consumption + survival probability
+        ax = axes[0]
+        ax.plot(months, cons_mean, color="tab:green", lw=2, linestyle="--", label="Mean Consumption")
 
-        # Plot wealth
-        self.plot_with_bands(axes[1], months, wealth_mean, wealth_bands, color="tab:blue",
-                              title="Wealth Over Time", title_size=title_size,
-                              legend_size=legend_size, tick_size=tick_size)
-        axes[1].plot(months, wealth_sample.values, color="red", lw=1.0, alpha=0.7, label="Sample Path")
-        axes[1].legend(fontsize=legend_size)
+        for i, (p, (lo, hi)) in enumerate(cons_bands.items()):
+            ax.fill_between(months, lo, hi, color="tab:green", alpha=0.15 + 0.15 * i,
+                            label=f"{p}-{100 - p}% Consumption Band")
 
-        # Plot investment / withdrawal
-        self.plot_with_bands(axes[2], months, inv_mean, inv_bands, color="tab:purple",
-                              title="Monthly Investment / Withdrawal", title_size=title_size,
-                              legend_size=legend_size, tick_size=tick_size)
-        axes[2].plot(months, inv_sample.values, color="red", lw=1.0, alpha=0.8, label="Sample Path")
-        axes[2].axhline(0.0, color="black", lw=1.0, alpha=0.7)
-        axes[2].legend(fontsize=legend_size)
+        ax2 = ax.twinx()  # create a secondary y-axis
+        ax2.plot(months, self.survival_probabilities, color="tab:orange", lw=2)
+        ax2.set_ylabel("Survival Probability")
+        ax2.set_ylim(0, 1)
 
-        # Survival probability
-        axes[3].plot(self.age_grid, self.survival_probabilities, color="tab:orange", lw=2)
-        axes[3].set_title("Survival Probability", fontsize=title_size)
-        axes[3].set_ylim(0.0, 1.05)
-        axes[3].grid(True)
-        axes[3].yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
+        ax.plot(months, self.survival_probabilities * cons_mean.max(),
+                color="tab:orange", lw=2, label="Survival Probability (scaled)")
+
+        ax.set_title("Consumption & Survival Probability", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+
+        # 2️⃣ Wealth
+        ax = axes[1]
+        ax.plot(months, wealth_mean, color="tab:blue", lw=2, linestyle="--", label="Mean Wealth")
+
+        for i, (p, (lo, hi)) in enumerate(wealth_bands.items()):
+            ax.fill_between(months, lo, hi, color="tab:blue", alpha=0.15 + 0.15 * i,
+                            label=f"{p}-{100 - p}% Wealth Band")
+
+        ax.plot(months, wealth_sample, color="red", lw=1, alpha=0.7, label="Sample Wealth")
+        ax.set_title("Wealth Over Time", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+
+        # 3️⃣ Investment / Withdrawal
+        ax = axes[2]
+        ax.plot(months, inv_mean, color="tab:purple", lw=2, linestyle="--", label="Mean Investment")
+
+        for i, (p, (lo, hi)) in enumerate(inv_bands.items()):
+            ax.fill_between(months, lo, hi, color="tab:purple", alpha=0.15 + 0.15 * i,
+                            label=f"{p}-{100 - p}% Investment Band")
+
+        ax.plot(months, inv_sample, color="red", lw=1, alpha=0.8, label="Sample Investment")
+        ax.axhline(0.0, color="black", lw=1.0, alpha=0.7)
+        ax.set_title("Monthly Investment / Withdrawal", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
 
         return fig, axes
 
-    def plot(self, percentiles=(5,10), sample_sim=None, title_size=22, legend_size=16, tick_size=16):
-        _, _ = self._create_plot(percentiles, sample_sim, title_size, legend_size, tick_size)
+    def plot(
+            self,
+            percentiles=(5, 10),
+            sample_sim=None,
+            title_size=22,
+            legend_size=16,
+            tick_size=16,
+    ):
+        """
+        Base class plot with 3 axes.
+        Legends now include full descriptive extension.
+        """
+        fig, axes = self._create_plot(percentiles, sample_sim, title_size, tick_size)
+
+        # add legends for all subplots
+        for ax in axes:
+            ax.legend(fontsize=legend_size)
+
         plt.show()

@@ -1,5 +1,5 @@
 import datetime as dt
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, OrderedDict
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
@@ -62,7 +62,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         current_age: int,
         retirement_date: dt.date,
         initial_wealth: float,
-        yearly_return: float,
+        yearly_return_savings: float,
         cashflows: List[CashflowBase],
         gbm_returns: GBM,
         survival_model: SurvivalModel,
@@ -119,7 +119,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             end_date=end_date,
             retirement_date=retirement_date,
             initial_wealth=initial_wealth,
-            yearly_return=yearly_return,
+            yearly_return_savings=yearly_return_savings,
             cashflows=cashflows,
             survival_model=survival_model,
             current_age=current_age,
@@ -426,7 +426,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             )
 
             # ---------- Apply returns ----------
-            savings_next = savings_after * (1.0 + self.monthly_return)
+            savings_next = savings_after * (1.0 + self.monthly_return_savings)
             stocks_next = stocks_after * returns_paths[:, t]
 
             wealth_next = savings_next + stocks_next
@@ -458,98 +458,242 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         percentiles=(5, 10),
         sample_sim=None,
         title_size=22,
-        legend_size=16,
-        tick_size=16,
+        legend_size=14,
+        tick_size=14,
     ):
         """
-        Extended plot: Reuse base _create_plot() and additionally show savings & stocks
-        in the wealth subplot using the same _plot_with_bands function for consistency.
+        Child class plot with 2 independent figures:
 
-        Parameters
-        ----------
-        percentiles : tuple[float, ...]
-            Percentile levels for shaded bands (e.g., (5,10) → 5-95%, 10-90%).
-        sample_sim : int or None
-            Index of the simulation to show as a sample path. Random if None.
-        title_size : int
-            Font size for subplot titles.
-        legend_size : int
-            Font size for legend.
-        tick_size : int
-            Font size for axis ticks.
+        Figure 1: Consumption + survival + investment/withdrawal
+        Figure 2: Wealth, Savings, Stocks (3 row subplots)
+
+        Legends below each row; confidence bands preserved.
         """
-        # 1. Get base figure and axes (without showing)
-        fig, axes = super()._create_plot(
-            percentiles, sample_sim, title_size, legend_size, tick_size
-        )
-
-        ax_wealth = axes[1]  # wealth subplot
-
         months = self.months
         n_sims = len(self.opt_wealth.columns)
 
         if sample_sim is None:
-            np.random.seed()
             sample_sim = np.random.randint(n_sims)
 
-        # 2. Compute mean + percentile bands for savings and stocks
+        # ---------------------
+        # FIGURE 1: consumption + survival + investment/withdrawal
+        # ---------------------
+        fig1, ax_list1 = plt.subplots(2, 1, figsize=(14, 10))
+
+        # ---- Row 1: Consumption + Survival ----
+        ax = ax_list1[0]
+        cons_mean, cons_bands = self.compute_mean_and_bands(
+            self.opt_consumption, percentiles
+        )
+        cons_sample = self.opt_consumption.iloc[:, sample_sim]
+
+        ax.plot(
+            months,
+            cons_mean,
+            color="tab:green",
+            lw=2,
+            linestyle="--",
+            label="Mean Consumption",
+        )
+
+        for i, (p, (lo, hi)) in enumerate(cons_bands.items()):
+            ax.fill_between(
+                months,
+                lo,
+                hi,
+                color="tab:green",
+                alpha=0.15 + 0.15 * i,
+                label=f"{p}-{100 - p}% Consumption Band",
+            )
+
+        ax.plot(
+            months,
+            cons_sample,
+            color="red",
+            lw=1,
+            alpha=0.8,
+            label="Sample Consumption",
+        )
+
+        ax.plot(
+            months,
+            self.cf,
+            color="blue",
+            lw=1,
+            linestyle="--",
+            label="Deterministic Cashflows",
+        )
+
+        ax2 = ax.twinx()
+        ax2.plot(
+            months,
+            self.survival_probabilities,
+            color="tab:orange",
+            lw=2,
+            label="Survival Probability",
+        )
+        ax2.set_ylim(0, 1.1)
+        ax.set_title("Consumption & Survival Probability", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=legend_size, ncol=3
+        )
+
+        # ---- Row 2: Investment / Withdrawal ----
+        ax = ax_list1[1]
+        inv_df = self.cf[:, np.newaxis] - self.opt_consumption.values
+        inv_mean, inv_bands = self.compute_mean_and_bands(
+            pd.DataFrame(inv_df), percentiles
+        )
+        inv_sample = pd.DataFrame(inv_df).iloc[:, sample_sim]
+        ax.plot(
+            months,
+            inv_mean,
+            color="tab:purple",
+            lw=2,
+            linestyle="--",
+            label="Mean Investment",
+        )
+
+        for i, (p, (lo, hi)) in enumerate(inv_bands.items()):
+            ax.fill_between(
+                months,
+                lo,
+                hi,
+                color="tab:purple",
+                alpha=0.15 + 0.15 * i,
+                label=f"{p}-{100 - p}% Investment Band",
+            )
+
+        ax.plot(
+            months,
+            inv_sample,
+            color="brown",
+            lw=1,
+            alpha=0.8,
+            label="Sample Investment",
+        )
+        ax.axhline(0.0, color="black", lw=1, alpha=0.7)
+        ax.set_title("Monthly Investment / Withdrawal", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=legend_size, ncol=3
+        )
+
+        fig1.tight_layout()
+
+        # ---------------------
+        # FIGURE 2: Wealth, Savings, Stocks
+        # ---------------------
+        fig2, ax_list2 = plt.subplots(3, 1, figsize=(14, 12))
+
+        # ---- Row 1: Wealth ----
+        ax = ax_list2[0]
+        wealth_mean, wealth_bands = self.compute_mean_and_bands(
+            self.opt_wealth, percentiles
+        )
+        wealth_sample = self.opt_wealth.iloc[:, sample_sim]
+        ax.plot(
+            months,
+            wealth_mean,
+            color="tab:blue",
+            lw=2,
+            linestyle="--",
+            label="Mean Wealth",
+        )
+
+        for i, (p, (lo, hi)) in enumerate(wealth_bands.items()):
+            ax.fill_between(
+                months,
+                lo,
+                hi,
+                color="tab:blue",
+                alpha=0.15 + 0.15 * i,
+                label=f"{p}-{100 - p}% Wealth Band",
+            )
+
+        ax.plot(
+            months, wealth_sample, color="red", lw=1, alpha=0.7, label="Sample Wealth"
+        )
+        ax.set_title("Wealth Over Time", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=legend_size, ncol=3
+        )
+
+        # ---- Row 2: Savings ----
+        ax = ax_list2[1]
         savings_mean, savings_bands = self.compute_mean_and_bands(
             self.opt_savings, percentiles
         )
+        savings_sample = self.opt_savings.iloc[:, sample_sim]
+        ax.plot(
+            months,
+            savings_mean,
+            color="orange",
+            lw=2,
+            linestyle="--",
+            label="Mean Savings",
+        )
+
+        for i, (p, (lo, hi)) in enumerate(savings_bands.items()):
+            ax.fill_between(
+                months,
+                lo,
+                hi,
+                color="orange",
+                alpha=0.15 + 0.15 * i,
+                label=f"{p}-{100 - p}% Savings Band",
+            )
+        ax.plot(
+            months, savings_sample, color="red", lw=1, alpha=0.8, label="Sample Savings"
+        )
+        ax.set_title("Savings Over Time", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=legend_size, ncol=3
+        )
+
+        # ---- Row 3: Stocks ----
+        ax = ax_list2[2]
         stocks_mean, stocks_bands = self.compute_mean_and_bands(
             self.opt_stocks, percentiles
         )
+        stocks_sample = self.opt_stocks.iloc[:, sample_sim]
 
-        # 3. Plot savings using base helper
-        self.plot_with_bands(
-            ax_wealth,
-            months,
-            savings_mean,
-            savings_bands,
-            color="orange",
-            title="Wealth Over Time",
-            title_size=title_size,
-            legend_size=legend_size,
-            tick_size=tick_size,
-        )
-
-        # 4. Plot stocks using base helper
-        self.plot_with_bands(
-            ax_wealth,
+        ax.plot(
             months,
             stocks_mean,
-            stocks_bands,
             color="purple",
-            title="Wealth Over Time",
-            title_size=title_size,
-            legend_size=legend_size,
-            tick_size=tick_size,
+            lw=2,
+            linestyle="--",
+            label="Mean Stocks",
         )
 
-        # 5. Plot sample paths
-        savings_sample = self.opt_savings.iloc[:, sample_sim]
-        stocks_sample = self.opt_stocks.iloc[:, sample_sim]
-        ax_wealth.plot(
-            months,
-            savings_sample,
-            color="orange",
-            lw=1,
-            alpha=0.7,
-            label="Savings Sample",
+        for i, (p, (lo, hi)) in enumerate(stocks_bands.items()):
+            ax.fill_between(
+                months,
+                lo,
+                hi,
+                color="purple",
+                alpha=0.15 + 0.15 * i,
+                label=f"{p}-{100 - p}% Stocks Band",
+            )
+        ax.plot(
+            months, stocks_sample, color="brown", lw=1, alpha=0.8, label="Sample Stocks"
         )
-        ax_wealth.plot(
-            months,
-            stocks_sample,
-            color="purple",
-            lw=1,
-            alpha=0.7,
-            label="Stocks Sample",
+        ax.set_title("Stocks Over Time", fontsize=title_size)
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=tick_size)
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=legend_size, ncol=3
         )
 
-        # 6. Update legend
-        ax_wealth.legend(fontsize=legend_size)
-
-        # 7. Show figure
+        fig2.tight_layout()
         plt.show()
 
     def train(

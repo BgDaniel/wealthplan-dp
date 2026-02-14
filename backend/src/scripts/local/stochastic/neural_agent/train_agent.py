@@ -84,20 +84,18 @@ def plot_policy_heatmaps(
 ):
     """
     Plot the trained neural network policy as 3D surfaces for consumption and savings actions.
+    Two-row layout, cleaner axes, shades of red/blue, formatted ticks.
     """
 
     # Find time index
     t_idx = np.where(np.array(agent.months) == inspection_date)[0]
-
     if len(t_idx) == 0:
         raise ValueError(f"inspection_date {inspection_date} not in agent.months")
-
     t_idx = t_idx[0]
 
     # Create grid
     wealth_scaled_grid = np.linspace(0.0, 1.0, n_wealth)
     savings_frac_grid = np.linspace(0.0, 1.0, n_savings_frac)
-
     W_scaled, S_frac = np.meshgrid(wealth_scaled_grid, savings_frac_grid)
 
     # Flatten for batch
@@ -110,55 +108,60 @@ def plot_policy_heatmaps(
     # Build state tensor
     state_tensor = torch.from_numpy(
         np.stack([S_frac_flat, W_flat, t_norm], axis=1)
-    ).float()
-
-    # Move to device
-    state_tensor = state_tensor.to(next(agent.policy_net.parameters()).device)
+    ).float().to(next(agent.policy_net.parameters()).device)
 
     # Actions from policy network
-    agent.policy_net.eval()  # Turn off dropout and batchnorm randomness
-
+    agent.policy_net.eval()
     actions = agent.policy_net(state_tensor).detach().cpu().numpy()
     consumption_rate = actions[:, 0].reshape(n_savings_frac, n_wealth)
     savings_rate = actions[:, 1].reshape(n_savings_frac, n_wealth)
 
-    # Plot 3D surfaces
-    fig = plt.figure(figsize=(16, 7))
+    # -------------------------
+    # Plot in two rows
+    # -------------------------
+    fig = plt.figure(figsize=(14, 12))
 
-    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
+    # ---- Row 1: Consumption ----
+    ax1 = fig.add_subplot(2, 1, 1, projection="3d")
     surf1 = ax1.plot_surface(
         W_scaled,
         S_frac,
         consumption_rate,
-        cmap="viridis",
+        cmap="Reds",
         linewidth=0,
         antialiased=True,
     )
     ax1.set_xlabel("Wealth (scaled)")
     ax1.set_ylabel("Savings Fraction")
     ax1.set_zlabel("Consumption Rate")
-    ax1.set_title("Policy: Consumption Rate")
-    fig.colorbar(surf1, ax=ax1, shrink=0.6)
+    ax1.set_title("Policy: Consumption Rate", pad=20)
+    ax1.yaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+    ax1.xaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+    ax1.zaxis.set_major_formatter(lambda v, _: f"{v:.2f}" if abs(v) >= 0.01 else f"{v:.2e}")
+    fig.colorbar(surf1, ax=ax1, shrink=0.6, aspect=15)
 
-    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
+    # ---- Row 2: Savings Transfer ----
+    ax2 = fig.add_subplot(2, 1, 2, projection="3d")
     surf2 = ax2.plot_surface(
         W_scaled,
         S_frac,
         savings_rate,
-        cmap="plasma",
+        cmap="Blues",
         linewidth=0,
         antialiased=True,
     )
     ax2.set_xlabel("Wealth (scaled)")
     ax2.set_ylabel("Savings Fraction")
     ax2.set_zlabel("Savings Transfer Rate")
-    ax2.set_title("Policy: Savings Transfer Rate")
-    fig.colorbar(surf2, ax=ax2, shrink=0.6)
+    ax2.set_title("Policy: Savings Transfer Rate", pad=20)
+    ax2.yaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+    ax2.xaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+    ax2.zaxis.set_major_formatter(lambda v, _: f"{v:.2f}" if abs(v) >= 0.01 else f"{v:.2e}")
+    fig.colorbar(surf2, ax=ax2, shrink=0.6, aspect=15)
 
-    # Add inspection date to super title
-    fig.suptitle(f"Policy surfaces at inspection date: {inspection_date}", fontsize=14)
-
-    plt.tight_layout()
+    # Super title with space above
+    fig.suptitle(f"Policy surfaces at inspection date: {inspection_date}", fontsize=16, y=0.95)
+    plt.tight_layout(pad=3.0)
     plt.show()
 
 def train_agent(
@@ -285,7 +288,7 @@ if __name__ == "__main__":
         hyperparams=hyperparams,
         params_file_name=PARAMS_FILE,
         run_task_id=RUN_TASK_ID,
-        n_epochs=25,
+        n_epochs=250,
         n_episodes=10000,
         plot_training=True,
         plot_results=True,

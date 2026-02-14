@@ -62,7 +62,7 @@ class OptimizerBase(ABC):
         end_date: dt.date,
         retirement_date: dt.date,
         initial_wealth: float,
-        yearly_return: float,
+        yearly_return_savings: float,
         cashflows: List[CashflowBase]
     ) -> None:
         """
@@ -85,9 +85,9 @@ class OptimizerBase(ABC):
         self.end_date: dt.date = end_date
         self.retirement_date = retirement_date
         self.initial_wealth: float = initial_wealth
-        self.yearly_return: float = yearly_return
+        self.yearly_return_savings: float = yearly_return_savings
 
-        self.monthly_return: float = (1 + self.yearly_return) ** (1/12) - 1
+        self.monthly_return_savings: float = (1 + self.yearly_return_savings) ** (1 / 12) - 1
 
         self.cashflows: List[CashflowBase] = cashflows
 

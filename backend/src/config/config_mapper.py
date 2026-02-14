@@ -56,7 +56,7 @@ KEY_START_DATE: str = "start_date"
 KEY_END_DATE: str = "end_date"
 KEY_RETIREMENT_DATE: str = "retirement_date"
 KEY_INITIAL_WEALTH: str = "initial_wealth"
-KEY_YEARLY_RETURN: str = "yearly_return"
+KEY_YEARLY_RETURN_SAVINGS: str = "yearly_return_savings"
 KEY_CASHFLOWS: str = "cashflows"
 
 KEY_NAME: str = "name"
@@ -119,7 +119,7 @@ class ConfigMapper:
             KEY_END_DATE: sim[KEY_END_DATE],
             KEY_RETIREMENT_DATE: sim[KEY_RETIREMENT_DATE],
             KEY_INITIAL_WEALTH: sim[KEY_INITIAL_WEALTH],
-            KEY_YEARLY_RETURN: sim[KEY_YEARLY_RETURN],
+            KEY_YEARLY_RETURN_SAVINGS: sim[KEY_YEARLY_RETURN_SAVINGS],
             KEY_CASHFLOWS: cashflows,
         }
 

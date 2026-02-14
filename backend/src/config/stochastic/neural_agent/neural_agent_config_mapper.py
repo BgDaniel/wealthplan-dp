@@ -5,7 +5,7 @@ from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, K
 from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM
 
 KEY_GBM_RETURNS: str = "gbm_returns"
-KEY_GBM_MU: str = "mu"
+KEY_GBM_YEARLY_RETURN: str = "yearly_return"
 KEY_GBM_SIGMA: str = "sigma"
 KEY_GBM_SEED: str = "seed"
 
@@ -73,11 +73,11 @@ class NeuralAgentConfigMapper(StochasticConfigMapper):
         # ----------------------
         gbm_returns: Dict[str, Any] = stochastic[KEY_GBM_RETURNS]
 
-        mu = gbm_returns[KEY_GBM_MU]
+        yearly_return = gbm_returns[KEY_GBM_YEARLY_RETURN]
         sigma = gbm_returns[KEY_GBM_SIGMA]
 
         gbm: GBM = GBM(
-            mu=mu,
+            yearly_return=yearly_return,
             sigma=sigma
         )
 

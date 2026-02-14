@@ -131,7 +131,7 @@ class BellmanOptimizer(OptimizerBase):
 
             v_t, policy_t = compute_optimal_policy(
                 self.wealth_grid,
-                self.monthly_return,
+                self.monthly_return_savings,
                 self.beta,
                 v_t_next,
                 cf_t,
@@ -178,7 +178,7 @@ class BellmanOptimizer(OptimizerBase):
 
             # wealth update
             W_current = (W_prev + self.cf[t - 1] - consumption_path[t - 1]) * (
-                1.0 + self.monthly_return
+                1.0 + self.monthly_return_savings
             )
 
             W_current = np.clip(

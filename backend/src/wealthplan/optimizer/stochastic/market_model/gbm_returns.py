@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 from typing import List, Optional
 
 import numpy as np
@@ -18,7 +19,7 @@ class GBM:
         - sigma is the volatility
     """
 
-    def __init__(self, mu: float, sigma: float) -> None:
+    def __init__(self, yearly_return: float, sigma: float) -> None:
         """
         Initialize the GBM model.
 
@@ -29,7 +30,12 @@ class GBM:
         sigma : float
             Volatility parameter.
         """
-        self.mu = mu
+        self.dt = 1.0 / 12.0
+
+        self.yearly_return = yearly_return
+        self.monthly_return = (1.0 + yearly_return) ** (1.0 / 12.0) - 1.0
+        self.monthly_return_cont = math.log(1.0 + self.monthly_return)
+
         self.sigma = sigma
 
     def simulate(
@@ -62,11 +68,6 @@ class GBM:
             raise ValueError("At least two dates are required for simulation.")
 
         # Convert dates to year fractions
-        times = np.array(
-            [(dates[i] - dates[0]).days / 365.0 for i in range(len(dates))]
-        )
-        dt = np.diff(times)
-
         n_steps = len(dates)
         paths = np.zeros((n_sims, n_steps))
         paths[:, 0] = s0
@@ -75,8 +76,8 @@ class GBM:
 
         for t in range(1, n_steps):
             z = np.random.normal(size=n_sims)
-            drift = (self.mu - 0.5 * self.sigma ** 2) * dt[t - 1]
-            diffusion = self.sigma * np.sqrt(dt[t - 1]) * z
+            drift = self.monthly_return_cont - 0.5 * self.sigma ** 2 * self.dt
+            diffusion = self.sigma * np.sqrt(self.dt) * z
             paths[:, t] = paths[:, t - 1] * np.exp(drift + diffusion)
 
         return paths

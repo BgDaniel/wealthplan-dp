@@ -125,7 +125,7 @@ def optimize(params: OptimizationInput) -> OptimizationResult:
             initial_wealth=params.initial_wealth, yearly_return=params.investment_return
         )
         logger.info(
-            f"Wealth object created with initial wealth: {wealth.initial_wealth}, yearly return: {wealth.yearly_return}"
+            f"Wealth object created with initial wealth: {wealth.initial_wealth}, yearly return: {wealth.yearly_return_savings}"
         )
 
         # -----------------------

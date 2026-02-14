@@ -5,10 +5,10 @@ simulation_parameters:
   run_config_id: "neural_agent"
   initial_wealth: 12000.0
   start_date: 2026-01-01
-  end_date: 2027-01-01
+  end_date: 2028-01-01
   current_age: 37
   retirement_date: 2055-07-01
-  yearly_return: 0.04
+  yearly_return_savings: 0.04
   initial_savings_fraction: 0.5
 
 # ----------------------------
@@ -40,8 +40,8 @@ stochastic:
   seed: null
 
   gbm_returns:
-    mu: 0.05
-    sigma: 0.0
+    yearly_return: 0.05
+    sigma: 0.4
 
   survival_model:
     b: 9.5e-5

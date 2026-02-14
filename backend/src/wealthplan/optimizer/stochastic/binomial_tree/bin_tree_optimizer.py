@@ -150,14 +150,14 @@ class BinTreeOptimizer(StochasticOptimizerBase):
             self.d: float = 1.0 / self.u
 
             assert (
-                self.d < 1.0 + self.monthly_return < self.u
+                    self.d < 1.0 + self.monthly_return_savings < self.u
             ), "Binomial tree model is not arbitrage free!"
 
-            self.p: float = (1.0 + self.monthly_return - self.d) / (self.u - self.d)
+            self.p: float = (1.0 + self.monthly_return_savings - self.d) / (self.u - self.d)
             self.q: float = 1.0 - self.p
         else:
-            self.u: float = 1.0 + self.monthly_return
-            self.d: float = 1.0 + self.monthly_return
+            self.u: float = 1.0 + self.monthly_return_savings
+            self.d: float = 1.0 + self.monthly_return_savings
 
             self.p: float = 0.5
             self.q: float = 0.5
