@@ -1,7 +1,8 @@
 import datetime as dt
-from typing import List, Callable, Tuple
+from typing import List, Tuple, Optional
 import numpy as np
 import pandas as pd
+import torch.nn.functional as F
 import torch
 import torch.optim as optim
 from matplotlib import pyplot as plt
@@ -10,7 +11,6 @@ from tqdm import trange
 from result_cache.result_cache import ResultCache
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.optimizer.math_tools.penality_functions import square_penalty
-from wealthplan.optimizer.math_tools.utility_functions import crra_utility_numba
 from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import (
     SimplePolicyNetwork,
 )
@@ -24,6 +24,21 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
 )
 
 EPS: float = 10e-1
+
+
+def crra_utility_torch(
+    consumption: torch.Tensor, gamma: float, eps: float = 1e-8
+) -> torch.Tensor:
+    """
+    CRRA utility in PyTorch, gradient-compatible.
+
+    u(c) = (c + eps)^(1 - gamma) / (1 - gamma)   if gamma != 1
+           log(c + eps)                           if gamma == 1
+    """
+    if gamma == 1.0:
+        return torch.log(consumption + eps)
+    else:
+        return ((consumption + eps) ** (1 - gamma)) / (1 - gamma)
 
 
 class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
@@ -53,15 +68,15 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         survival_model: SurvivalModel,
         gamma: float,
         epsilon: float,
-        stochastic: bool,
         lr: float,
         device: str,
         saving_min: float,
         buy_pct: float,
         sell_pct: float,
-        max_wealth_factor: float,
+        max_wealth: float,
         initial_savings_fraction: float,
-        use_cache: bool
+        use_cache: bool,
+        seed: Optional[int] = None,
     ) -> None:
         """
         Initialize the neural agent optimizer.
@@ -108,7 +123,8 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             cashflows=cashflows,
             survival_model=survival_model,
             current_age=current_age,
-            stochastic=stochastic,
+            stochastic=False,
+            seed=seed,
         )
 
         self.gbm_returns: GBM = gbm_returns
@@ -127,7 +143,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         self.buy_pct = buy_pct
         self.sell_pct = sell_pct
 
-        self.max_wealth_factor: float = max_wealth_factor
+        self.max_wealth: float = max_wealth
 
         self.max_allowed_wealth = (
             self.max_wealth_factor * (self.initial_wealth - self.saving_min)
@@ -141,31 +157,74 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         self.use_cache = use_cache
         self.cache = ResultCache(run_id=run_config_id, enabled=self.use_cache)
 
-    def _get_wealth_scaled(self, wealth: np.ndarray) -> np.ndarray:
-        return (wealth - self.saving_min) / (self.initial_wealth - self.saving_min)
-
-    def _get_savings_fraction(
-        self, savings: np.ndarray, wealth: np.ndarray
-    ) -> np.ndarray:
-        return (savings - self.saving_min) / (wealth - self.saving_min)
-
-    def _get_stocks_fraction(
-        self, stocks: np.ndarray, wealth: np.ndarray
-    ) -> np.ndarray:
-        return stocks / (wealth - self.saving_min)
-
-
-    def _build_state_tensor(
-        self, available_savings: np.ndarray, available_stocks: np.ndarray, t: int
-    ) -> torch.Tensor:
+    def _get_wealth_scaled(self, wealth: torch.Tensor) -> torch.Tensor:
         """
-        Construct the batch state tensor for the policy network in a vectorized manner.
+        Compute min-max scaled wealth for tensor inputs.
 
         Parameters
         ----------
-        available_savings : np.ndarray
+        wealth : torch.Tensor
+            Total wealth tensor of shape (batch_size,)
+
+        Returns
+        -------
+        torch.Tensor
+            Scaled wealth tensor of shape (batch_size,).
+        """
+        return (wealth - self.saving_min) / (self.initial_wealth - self.saving_min)
+
+    def _get_savings_fraction(
+        self, savings: torch.Tensor, wealth: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute the fraction of total wealth allocated to savings.
+
+        Parameters
+        ----------
+        savings : torch.Tensor
+            Savings tensor of shape (batch_size,)
+        wealth : torch.Tensor
+            Total wealth tensor of shape (batch_size,)
+
+        Returns
+        -------
+        torch.Tensor
+            Fraction of wealth in savings, shape (batch_size,).
+        """
+        return (savings - self.saving_min) / (wealth - self.saving_min)
+
+    def _get_stocks_fraction(
+        self, stocks: torch.Tensor, wealth: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute the fraction of total wealth allocated to stocks.
+
+        Parameters
+        ----------
+        stocks : torch.Tensor
+            Stocks tensor of shape (batch_size,)
+        wealth : torch.Tensor
+            Total wealth tensor of shape (batch_size,)
+
+        Returns
+        -------
+        torch.Tensor
+            Fraction of wealth in stocks, shape (batch_size,).
+        """
+        return stocks / (wealth - self.saving_min)
+
+    def _build_state_tensor(
+        self, available_savings: torch.Tensor, available_stocks: torch.Tensor, t: int
+    ) -> torch.Tensor:
+        """
+        Construct the batch state tensor for the policy network in a vectorized manner.
+        Fully tensorized, gradient-compatible.
+
+        Parameters
+        ----------
+        available_savings : torch.Tensor
             Current savings for each agent (batch_size,)
-        available_stocks : np.ndarray
+        available_stocks : torch.Tensor
             Current stock holdings for each agent (batch_size,)
         t : int
             Current timestep
@@ -173,59 +232,40 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         Returns
         -------
         torch.Tensor
-            State tensor of shape (batch_size, 4), with:
+            State tensor of shape (batch_size, 3), with:
             - savings fraction
-            - stocks fraction
-            - log(total wealth)
+            - scaled total wealth
             - normalized time
         """
         total_wealth = available_savings + available_stocks
 
-        savings_frac = self._get_savings_fraction(available_savings, total_wealth)
+        # Compute fractions using tensor operations
+        savings_frac = (available_savings - self.saving_min) / (
+            total_wealth - self.saving_min + 1e-8
+        )
+        # Optional: clip to [0,1] to avoid numerical issues
+        savings_frac = torch.clamp(savings_frac, 0.0, 1.0)
 
-        # Validate fractions are within [0, 1]
-        if np.any(savings_frac < -EPS) or np.any(savings_frac > 1.0 + EPS):
-            offending = savings_frac[(savings_frac < 0.0) | (savings_frac > 1.0)]
-
-            raise ValueError(
-                f"savings_frac out of bounds [0,1]! Found values: {offending}"
-            )
-
-        # Min-max scaled absolute wealth
-        wealth_scaled = self._get_wealth_scaled(total_wealth)
-
-        if np.any(wealth_scaled > self.max_wealth_factor + EPS):
-            offending = wealth_scaled[wealth_scaled > self.max_wealth_factor + EPS]
-
-            raise ValueError(
-                f"Scaled wealth exceeds max_wealth_factor!\n"
-                f"Max allowed: {self.max_wealth_factor}, "
-                f"Found values: {offending}"
-            )
+        # Min-max scaled total wealth
+        wealth_scaled = (total_wealth - self.saving_min) / (
+            self.initial_wealth - self.saving_min + 1e-8
+        )
+        wealth_scaled = torch.clamp(wealth_scaled, 0.0, self.max_wealth_factor)
 
         # Normalized time
+        batch_size = available_savings.shape[0]
         t_norm = torch.full(
-            (available_savings.shape[0],),
-            t / self.n_months,
-            dtype=torch.float32,
-            device=self.device,
+            (batch_size,), t / self.n_months, dtype=torch.float32, device=self.device
         )
 
-        # Stack features into a single tensor
-        state_tensor = torch.stack(
-            [
-                torch.from_numpy(savings_frac).float().to(self.device),
-                torch.from_numpy(wealth_scaled).float().to(self.device),
-                t_norm,
-            ],
-            dim=1,
-        )
+        # Stack features
+        state_tensor = torch.stack([savings_frac, wealth_scaled, t_norm], dim=1)
 
         return state_tensor
 
     def _enforce_max_wealth(
-        self, savings: np.ndarray, stocks: np.ndarray, consumption: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self, savings: torch.Tensor, stocks: torch.Tensor, consumption: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Enforce maximum allowed wealth by proportionally increasing consumption
         and reducing savings & stocks if scaled total wealth exceeds max_wealth_factor.
 
@@ -242,57 +282,31 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         """
         # Compute scaled total wealth
         total_wealth = savings + stocks
-
-        # Identify paths exceeding max wealth factor
         mask_exceed = total_wealth > self.max_allowed_wealth
 
-        if np.any(mask_exceed):
+        if mask_exceed.any():
             excess = total_wealth[mask_exceed] - self.max_allowed_wealth
-
-            # Compute fraction of wealth in savings/stocks
-            frac_savings = self._get_savings_fraction(
-                savings[mask_exceed], total_wealth[mask_exceed]
+            frac_savings = (savings[mask_exceed] - self.saving_min) / (
+                total_wealth[mask_exceed] - self.saving_min
             )
-            frac_stocks = self._get_stocks_fraction(
-                stocks[mask_exceed], total_wealth[mask_exceed]
+            frac_stocks = stocks[mask_exceed] / (
+                total_wealth[mask_exceed] - self.saving_min
             )
 
-            # Increase consumption
             consumption[mask_exceed] += excess
-
-            # Reduce savings and stocks proportionally
             savings[mask_exceed] -= excess * frac_savings
             stocks[mask_exceed] -= excess * frac_stocks
 
         # Enforce minimum constraints
-        savings = np.maximum(savings, self.saving_min)
-        stocks = np.maximum(stocks, 0.0)
-        total_wealth = savings + stocks
-
-        if np.any(savings < self.saving_min - EPS):
-            raise ValueError(
-                f"Some savings fell below the minimum (eps={EPS}): {savings[savings < self.saving_min - EPS]}"
-            )
-
-        if np.any(stocks < -EPS):
-            raise ValueError(
-                f"Some stocks are negative (eps={EPS}): {stocks[stocks < -EPS]}"
-            )
-
-        if np.any(total_wealth > self.max_allowed_wealth + EPS):
-            offending = total_wealth[total_wealth > self.max_allowed_wealth + EPS]
-
-            raise ValueError(
-                f"Total wealth exceeds the maximum allowed wealth.\n"
-                f"Max allowed wealth: {self.max_allowed_wealth}\n"
-                f"Offending total wealth values: {offending}"
-            )
-
+        savings = torch.maximum(
+            savings, torch.tensor(self.saving_min, device=savings.device)
+        )
+        stocks = torch.maximum(stocks, torch.tensor(0.0, device=stocks.device))
         return savings, stocks, consumption
 
     def _simulate_forward(
         self, batch_size: int = None, batch_seed: int = None
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate forward one episode batch using the current policy.
 
@@ -315,236 +329,217 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         consumption_path : np.ndarray
             Array of shape (n_months, batch_size) with monthly consumption.
         """
-        returns_paths = self.gbm_returns.simulate(
-            n_sims=batch_size, dates=self.months, seed=batch_seed
-        )
-        survival_paths = self.survival_model.simulate_survival(
-            age_t=self.age_grid, dt=self.dt, n_sims=batch_size
-        )
+        # ---------- Storage lists (graph safe) ----------
+        savings_list: list[torch.Tensor] = []
+        stocks_list: list[torch.Tensor] = []
+        wealth_list: list[torch.Tensor] = []
+        consumption_list: list[torch.Tensor] = []
 
-        savings_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
-        savings_paths[0] = np.full(
-            batch_size,
+        # ---------- Initial allocation ----------
+        savings_prev = torch.full(
+            (batch_size,),
             self.initial_wealth * self.initial_savings_fraction,
-            dtype=np.float32,
+            device=self.device,
+            dtype=torch.float32,
         )
 
-        stocks_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
-        stocks_paths[0] = np.full(
-            batch_size,
+        stocks_prev = torch.full(
+            (batch_size,),
             self.initial_wealth * (1.0 - self.initial_savings_fraction),
-            dtype=np.float32,
+            device=self.device,
+            dtype=torch.float32,
         )
 
-        consumption_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
+        wealth_prev = savings_prev + stocks_prev
 
-        wealth_paths = np.zeros((self.n_months, batch_size), dtype=np.float32)
-        wealth_paths[0] = np.full(
-            batch_size,
-            self.initial_wealth,
-            dtype=np.float32,
+        savings_list.append(savings_prev)
+        stocks_list.append(stocks_prev)
+        wealth_list.append(wealth_prev)
+
+        # ---------- Stochastic paths ----------
+        returns_paths = torch.tensor(
+            self.gbm_returns.simulate(
+                n_sims=batch_size, dates=self.months, seed=batch_seed
+            ),
+            device=self.device,
+            dtype=torch.float32,
         )
 
+        survival_paths = torch.tensor(
+            self.survival_model.simulate_survival(
+                age_t=self.age_grid, dt=self.dt, n_sims=batch_size
+            ),
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        # ---------- Forward simulation ----------
         for t in range(1, self.n_months):
-            alive_mask = survival_paths[t, :] == 1
+            alive_mask = survival_paths[t] > 0.0
 
-            # ----------------------------
-            # Compute deterministic cashflows for this month
-            # ----------------------------
-            cf_t_before = self.cf[t - 1]
+            # deterministic cashflows
+            cf_t = torch.tensor(self.cf[t - 1], device=self.device, dtype=torch.float32)
 
-            # Add cashflows to savings BEFORE taking any actions
-            available_savings_before = savings_paths[t - 1] + cf_t_before
+            savings_before = savings_prev + cf_t
+            stocks_before = stocks_prev
 
-            returns_t = returns_paths[:, t]
-
-            # ----------------------------
-            # Ensure max wealth is not violated after cashflows
-            # ----------------------------
-            available_savings_before, stocks_paths[t - 1], _ = self._enforce_max_wealth(
-                available_savings_before,
-                stocks_paths[t - 1],
-                consumption=np.zeros_like(
-                    available_savings_before
-                ),  # no extra consumption yet
+            # enforce max wealth BEFORE actions
+            savings_before, stocks_before, _ = self._enforce_max_wealth(
+                savings_before,
+                stocks_before,
+                torch.zeros_like(savings_before),
             )
 
-            # Vectorized state for the whole batch
+            # ---------- State for policy ----------
             state_tensor = self._build_state_tensor(
-                available_savings_before, stocks_paths[t - 1], t - 1
+                savings_before,
+                stocks_before,
+                t - 1,
             )
 
-            # Get batch actions
-            actions = self.policy_net(state_tensor).detach().cpu().numpy()
-
-            # ----------------------------
-            # Compute consumption & transfers
-            # ----------------------------
+            actions = self.policy_net(state_tensor)
             consumption_rate = actions[:, 0]
-
-            total_wealth = available_savings_before + stocks_paths[t - 1]
-            total_available_wealth = total_wealth - self.saving_min
-
-            consumption = consumption_rate * total_available_wealth
-
-            total_available_wealth_after_consumption = (
-                total_available_wealth - consumption
-            )
-
             savings_rate = actions[:, 1]
 
-            savings_after_rebalancing = self.saving_min + savings_rate * (
-                total_available_wealth_after_consumption - self.saving_min
+            # ---------- Compute portfolio ----------
+            total_wealth = savings_before + stocks_before
+            available = total_wealth - self.saving_min
+
+            consumption = consumption_rate * available
+            savings_after = self.saving_min + savings_rate * (available - consumption)
+            stocks_after = available - consumption - savings_after
+
+            # ---------- Transaction costs (NO inplace!) ----------
+            delta = stocks_after - stocks_before
+
+            buy_cost = torch.where(delta > 0, delta * self.buy_pct / 100.0, 0.0)
+            sell_cost = torch.where(delta < 0, (-delta) * self.sell_pct / 100.0, 0.0)
+
+            stocks_after_transaction_costs = stocks_after - buy_cost - sell_cost
+
+            # ---------- Death handling (NO inplace masking) ----------
+            consumption = torch.where(alive_mask, consumption, torch.zeros_like(consumption))
+            savings_after = torch.where(alive_mask, savings_after, savings_prev)
+            stocks_after = torch.where(alive_mask, stocks_after, stocks_prev)
+
+            # ---------- Enforce max wealth AFTER actions ----------
+            savings_after, stocks_after, consumption = self._enforce_max_wealth(
+                savings_after, stocks_after, consumption
             )
 
-            stocks_after_rebalancing = (
-                total_available_wealth_after_consumption - savings_after_rebalancing
-            )
-
-            # ----------------------------
-            # Apply transaction costs
-            # ----------------------------
-            delta_stocks = stocks_after_rebalancing - stocks_paths[t - 1]
-
-            buy_mask = delta_stocks > 0
-            sell_mask = delta_stocks < 0
-
-            stocks_after_rebalancing[buy_mask] -= (
-                delta_stocks[buy_mask] * self.buy_pct / 100.0
-            )
-            stocks_after_rebalancing[sell_mask] -= (
-                (-delta_stocks[sell_mask]) * self.sell_pct / 100.0
-            )
-
-            # Zero consumption for dead agents
-            consumption[~alive_mask] = 0.0
-
-            # Keep previous savings/stocks for dead agents
-            savings_after_rebalancing[~alive_mask] = savings_paths[t - 1, ~alive_mask]
-            stocks_after_rebalancing[~alive_mask] = stocks_paths[t - 1, ~alive_mask]
-
-            # check constraints
-            if np.any(savings_after_rebalancing < self.saving_min):
-                raise ValueError(
-                    f"Some savings fell below the minimum after rebalancing at t={t}: "
-                    f"{savings_after_rebalancing[savings_after_rebalancing < self.saving_min]}"
-                )
-
-            # record
-            savings_next = savings_after_rebalancing * (1 + self.monthly_return)
-            stocks_next = stocks_after_rebalancing * returns_t
-
-            # ----------------------------
-            # Enforce max wealth for current timestep
-            # ----------------------------
-            savings_next, stocks_next, consumption = self._enforce_max_wealth(
-                savings_next, stocks_next, consumption
-            )
+            # ---------- Apply returns ----------
+            savings_next = savings_after * (1.0 + self.monthly_return)
+            stocks_next = stocks_after * returns_paths[:, t]
 
             wealth_next = savings_next + stocks_next
 
-            # ----------------------------
-            # Record paths
-            # ----------------------------
-            savings_paths[t, :] = savings_next
-            stocks_paths[t, :] = stocks_next
-            consumption_paths[t - 1, :] = consumption
-            wealth_paths[t, :] = wealth_next
+            # ---------- Append to lists ----------
+            savings_list.append(savings_next)
+            stocks_list.append(stocks_next)
+            wealth_list.append(wealth_next)
+            consumption_list.append(consumption)
+
+            # ---------- Move forward ----------
+            savings_prev = savings_next
+            stocks_prev = stocks_next
+
+        # ---------- Stack results ----------
+        savings_paths = torch.stack(savings_list)
+        stocks_paths = torch.stack(stocks_list)
+        wealth_paths = torch.stack(wealth_list)
+        consumption_paths = torch.stack(consumption_list)
+
+        # add final zero consumption month
+        zero_last = torch.zeros_like(consumption_paths[0]).unsqueeze(0)
+        consumption_paths = torch.cat([consumption_paths, zero_last], dim=0)
 
         return savings_paths, stocks_paths, consumption_paths, wealth_paths
 
     def train(
         self,
         n_epochs: int = 500,
-        batch_size: int = 1000,
-        n_batches: int = 10,
+        n_episodes: int = 5000,
+        lambda_penalty: float = 1.0,
         plot: bool = True,
     ) -> None:
         """
-        Train the policy network using REINFORCE with mini-batch updates.
+        Train the policy network using fully differentiable
+        Monte Carlo policy optimization.
+
+        Each epoch:
+            - Simulates `n_episodes` wealth paths
+            - Computes CRRA utility
+            - Applies softplus penalty to negative wealth
+            - Performs one gradient ascent step
 
         Parameters
         ----------
         n_epochs : int
-            Number of training epochs.
-        batch_size : int
-            Number of simulation paths per batch.
-        n_batches : int
-            Number of batches per epoch.
+            Number of training epochs (optimizer steps).
+        n_episodes : int
+            Number of simulated episodes per epoch.
+            This is your Monte Carlo batch size.
+        lambda_penalty : float
+            Strength of the soft constraint for negative wealth.
+            Higher values enforce stronger non-negativity.
         plot : bool
-            If True, will plot training progress after each epoch.
+            Whether to plot training progress.
         """
-        self.batch_size = batch_size
 
         epoch_rewards: List[float] = []
 
         for _ in trange(n_epochs, desc="Training Epochs"):
-            batch_rewards: List[float] = []
+            # === Forward simulation (fully in torch) ===
+            savings_paths, stocks_paths, consumption_paths, wealth_paths = (
+                self._simulate_forward(batch_size=n_episodes)
+            )
 
-            for batch_idx in range(n_batches):
-                # simulate batch_size paths
-                savings_paths, stocks_paths, consumption_paths, wealth_paths = (
-                    self._simulate_forward(batch_size=batch_size)
-                )
+            # === Utility ===
+            rewards = crra_utility_torch(consumption_paths, self.gamma, self.epsilon)
 
-                # compute reward
-                total_reward = 0.0
+            # === Softplus penalty for negative wealth ===
+            # penalizes only when wealth < 0
+            penalty = F.softplus(-wealth_paths)
 
-                for t in range(self.n_months):
-                    total_reward += crra_utility_numba(
-                        consumption_paths[t, :], self.gamma, self.epsilon
-                    ).mean()
+            # === Objective ===
+            total_reward = rewards.mean() - lambda_penalty * penalty.mean()
 
-                # ----------------------------
-                # Apply pathwise terminal penalty
-                # ----------------------------
-                # survival paths for this batch
-                survival_paths = self.survival_model.simulate_survival(
-                    age_t=self.age_grid, dt=self.dt, n_sims=batch_size
-                )
+            # === Gradient ascent ===
+            self.optimizer.zero_grad()
+            loss = -total_reward
+            loss.backward()
+            self.optimizer.step()
 
-                terminal_wealth = np.zeros(batch_size, dtype=np.float32)
+            epoch_rewards.append(total_reward.item())
 
-                for i in range(batch_size):
-                    # find first timestep agent dies
-                    death_indices = np.where(survival_paths[:, i] == 0)[0]
-                    if death_indices.size > 0:
-                        death_t = death_indices[0]
-                        terminal_wealth[i] = wealth_paths[death_t, i]
-                    else:
-                        # survived entire simulation
-                        terminal_wealth[i] = wealth_paths[-1, i]
+        # Convert to DataFrames immediately
+        self.opt_savings = pd.DataFrame(
+            savings_paths.detach().cpu().numpy(),
+            index=self.months
+        )
 
-                # apply penalty to terminal wealth
-                penalty = self.terminal_penalty(terminal_wealth)
-                total_reward += penalty.mean()
+        self.opt_stocks = pd.DataFrame(
+            stocks_paths.detach().cpu().numpy(),
+            index=self.months
+        )
 
-                # accumulate rewards for plotting
-                batch_rewards.append(total_reward.item())
+        self.opt_wealth = pd.DataFrame(
+            wealth_paths.detach().cpu().numpy(),
+            index=self.months
+        )
 
-                # gradient ascent step for this batch
-                self.optimizer.zero_grad()
-                loss = -torch.tensor(total_reward, requires_grad=True)
-                loss.backward()
-                self.optimizer.step()
+        # consumption is one month shorter
+        self.opt_consumption = pd.DataFrame(
+            consumption_paths.detach().cpu().numpy(),
+            index=self.months
+        )
 
-            # store mean reward for this epoch
-            epoch_rewards.append(sum(batch_rewards) / n_batches)
-
-        # Save optimal paths
-        self.opt_savings = pd.DataFrame(savings_paths, index=self.months)
-        self.opt_stocks = pd.DataFrame(stocks_paths, index=self.months)
-        self.opt_consumption = pd.DataFrame(consumption_paths, index=self.months)
-        self.opt_wealth = pd.DataFrame(wealth_paths, index=self.months)
-
+        # === Plot training curve ===
         if plot:
             plt.figure(figsize=(10, 6))
-            plt.plot(
-                range(len(epoch_rewards)), epoch_rewards, label="Mean Reward per Epoch"
-            )
+            plt.plot(epoch_rewards)
             plt.xlabel("Epoch")
-            plt.ylabel("Mean Reward")
-            plt.title("Neural Agent Training Progress")
+            plt.ylabel("Mean Penalized Reward")
+            plt.title("Training Progress")
             plt.grid(True)
-            plt.legend()
             plt.show()

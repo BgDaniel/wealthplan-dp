@@ -5,7 +5,7 @@ from typing import Dict
 import datetime as dt
 import matplotlib.pyplot as plt
 import numpy as np
-
+import pandas as pd
 
 import torch
 import torch.nn as nn
@@ -27,6 +27,8 @@ from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import (
 ACT_RELU = "ReLU"
 ACT_LEAKY_RELU = "LeakyReLU"
 ACT_TANH = "Tanh"
+ACT_SOFTPLUS = "Softplus"
+
 
 ENV_OUTPUT_FOLDER = "OUTPUT_FOLDER"
 SUBDIR_NEURAL_AGENT = "neural_agent"
@@ -43,7 +45,6 @@ HP_HIDDEN_LAYERS = "hidden_layers"
 HP_ACTIVATION = "activation"
 HP_DROPOUT = "dropout"
 HP_LR = "lr"
-HP_BATCH_SIZE = "batch_size"
 
 # ----------------------------
 # Activation mapping
@@ -52,6 +53,7 @@ ACTIVATIONS = {
     ACT_RELU: nn.ReLU,
     ACT_LEAKY_RELU: nn.LeakyReLU,
     ACT_TANH: nn.Tanh,
+    ACT_SOFTPLUS: nn.Softplus,
 }
 
 
@@ -81,25 +83,13 @@ def plot_policy_heatmaps(
     n_savings_frac: int = 500,
 ):
     """
-    Plot the trained neural network policy as heatmaps for consumption and savings actions.
-
-    Parameters
-    ----------
-    agent : NeuralAgentWealthOptimizer
-        Trained agent with policy_net.
-    inspection_date : dt.date
-        Date to evaluate the policy (fixes time dimension). Defaults to first simulation month.
-    n_wealth : int
-        Grid points for total wealth.
-    n_savings_frac : int
-        Grid points for savings fraction.
+    Plot the trained neural network policy as 3D surfaces for consumption and savings actions.
     """
-    # default to first month if no date provided
-    t_idx = np.where(np.array(agent.months) == inspection_date)[0]
 
+    # Find time index
+    t_idx = np.where(np.array(agent.months) == inspection_date)[0]
     if len(t_idx) == 0:
         raise ValueError(f"inspection_date {inspection_date} not in agent.months")
-
     t_idx = t_idx[0]
 
     # Create grid
@@ -114,7 +104,7 @@ def plot_policy_heatmaps(
     # Normalized time feature
     t_norm = np.full_like(W_flat, fill_value=t_idx / agent.n_months, dtype=np.float32)
 
-    # Build state tensor directly (3 features: savings_frac, wealth_scaled, t_norm)
+    # Build state tensor
     state_tensor = torch.from_numpy(
         np.stack([S_frac_flat, W_flat, t_norm], axis=1)
     ).float()
@@ -127,41 +117,51 @@ def plot_policy_heatmaps(
     consumption_rate = actions[:, 0].reshape(n_savings_frac, n_wealth)
     savings_rate = actions[:, 1].reshape(n_savings_frac, n_wealth)
 
-    # Plot heatmaps
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    # Plot 3D surfaces
+    fig = plt.figure(figsize=(16, 7))
 
-    im0 = axes[0].imshow(
+    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
+    surf1 = ax1.plot_surface(
+        W_scaled,
+        S_frac,
         consumption_rate,
-        origin="lower",
-        extent=[0.0, agent.max_wealth_factor, 0, 1],
-        aspect="auto",
         cmap="viridis",
+        linewidth=0,
+        antialiased=True,
     )
-    axes[0].set_xlabel("Wealth (scaled)")
-    axes[0].set_ylabel("Savings Fraction")
-    axes[0].set_title("Policy: Consumption Rate")
-    fig.colorbar(im0, ax=axes[0])
+    ax1.set_xlabel("Wealth (scaled)")
+    ax1.set_ylabel("Savings Fraction")
+    ax1.set_zlabel("Consumption Rate")
+    ax1.set_title("Policy: Consumption Rate")
+    fig.colorbar(surf1, ax=ax1, shrink=0.6)
 
-    im1 = axes[1].imshow(
+    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
+    surf2 = ax2.plot_surface(
+        W_scaled,
+        S_frac,
         savings_rate,
-        origin="lower",
-        extent=[0.0, agent.max_wealth_factor, 0, 1],
-        aspect="auto",
         cmap="plasma",
+        linewidth=0,
+        antialiased=True,
     )
-    axes[1].set_xlabel("Wealth (scaled)")
-    axes[1].set_ylabel("Savings Fraction")
-    axes[1].set_title("Policy: Savings Transfer Rate")
-    fig.colorbar(im1, ax=axes[1])
+    ax2.set_xlabel("Wealth (scaled)")
+    ax2.set_ylabel("Savings Fraction")
+    ax2.set_zlabel("Savings Transfer Rate")
+    ax2.set_title("Policy: Savings Transfer Rate")
+    fig.colorbar(surf2, ax=ax2, shrink=0.6)
+
+    # Add inspection date to super title
+    fig.suptitle(f"Policy surfaces at inspection date: {inspection_date}", fontsize=14)
 
     plt.tight_layout()
     plt.show()
-
 
 def train_agent(
     hyperparams: Dict[str, object],
     params_file_name: str,
     run_task_id: str,
+    n_epochs: int = 250,
+    n_episodes: int = 5000,
     plot_training: bool = False,
     plot_results: bool = False,
     save: bool = False,
@@ -187,11 +187,6 @@ def train_agent(
     Returns:
         Objective value (mean total consumption)
     """
-    # ----------------------------
-    # Prepare output directory
-    # ----------------------------
-    run_dir = _prepare_output_dir(run_task_id)
-
     # ----------------------------
     # Load configuration
     # ----------------------------
@@ -224,10 +219,9 @@ def train_agent(
     # Train agent
     # ----------------------------
     agent.train(
-        n_epochs=10,  # shortened for HPO / testing
-        batch_size=hyperparams[HP_BATCH_SIZE],
-        n_batches=10,
-        plot=plot_training,
+        n_epochs=n_epochs,
+        n_episodes=n_episodes,
+        plot=plot_training
     )
 
     # ----------------------------
@@ -240,8 +234,10 @@ def train_agent(
             agent.policy_net.state_dict(),
             os.path.join(cache_dir, FILE_POLICY_NET),
         )
+
         agent.opt_savings.to_csv(os.path.join(cache_dir, FILE_SAVINGS))
         agent.opt_stocks.to_csv(os.path.join(cache_dir, FILE_STOCKS))
+        agent.opt_wealth.to_csv(os.path.join(cache_dir, FILE_STOCKS))
         agent.opt_consumption.to_csv(os.path.join(cache_dir, FILE_CONSUMPTION))
 
     # ----------------------------
@@ -252,6 +248,10 @@ def train_agent(
 
         first_month_date = agent.months[0]  # or choose any date
         plot_policy_heatmaps(agent, inspection_date=first_month_date)
+
+        agent.policy_net.plot_weight_distributions()
+
+    agent.policy_net.print_diagnostics(n_test=n_episodes)
 
     # ----------------------------
     # Objective
@@ -268,17 +268,18 @@ if __name__ == "__main__":
     DEVICE = "cpu"
 
     hyperparams = {
-        HP_HIDDEN_LAYERS: [64, 64, 64],
-        HP_ACTIVATION: ACT_RELU,
+        HP_HIDDEN_LAYERS: [64, 64],
+        HP_ACTIVATION: ACT_SOFTPLUS,
         HP_DROPOUT: 0.1,
-        HP_LR: 0.001,
-        HP_BATCH_SIZE: 10000,
+        HP_LR: 0.001
     }
 
     obj = train_agent(
         hyperparams=hyperparams,
         params_file_name=PARAMS_FILE,
         run_task_id=RUN_TASK_ID,
+        n_epochs=100,
+        n_episodes=7500,
         plot_training=True,
         plot_results=True,
         save=True,

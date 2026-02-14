@@ -40,7 +40,8 @@ class StochasticOptimizerBase(OptimizerBase):
             cashflows: List[CashflowBase],
             survival_model: SurvivalModel,
             current_age: int,
-            stochastic: bool
+            stochastic: bool,
+            seed: Optional[int] = None,
     ) -> None:
         super().__init__(
             run_config_id=run_config_id,
@@ -63,6 +64,8 @@ class StochasticOptimizerBase(OptimizerBase):
         # Storage for simulation results
         self.optimal_wealth: Optional[pd.DataFrame] = None
         self.optimal_consumption: Optional[pd.DataFrame] = None
+
+        self.seed = seed
 
     def plot(
         self,

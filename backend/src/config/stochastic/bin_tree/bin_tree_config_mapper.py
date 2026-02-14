@@ -9,7 +9,6 @@ from config.stochastic.stochastic_config_mapper import StochasticConfigMapper, K
 
 KEY_BETA: str = "beta"
 KEY_SIGMA: str = "sigma"
-KEY_SEED: str = "seed"
 KEY_N_SIMS: str = "n_sims"
 
 
@@ -53,8 +52,8 @@ class BinTreeConfigMapper(StochasticConfigMapper):
 
         params.update(
             {
+                KEY_STOCHASTIC: stochastic[KEY_STOCHASTIC],
                 KEY_SIGMA:  stochastic[KEY_SIGMA],
-                KEY_SEED:  stochastic[KEY_SEED],
                 KEY_N_SIMS :  stochastic[KEY_N_SIMS]
             }
         )

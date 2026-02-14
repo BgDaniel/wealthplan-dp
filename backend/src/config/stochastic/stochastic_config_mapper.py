@@ -8,6 +8,7 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
 )
 
 KEY_STOCHASTIC: str = "stochastic"
+KEY_SEED: str = "seed"
 
 KEY_SURVIVAL_MODEL: str = "survival_model"
 KEY_SURVIVAL_B: str = "b"
@@ -17,7 +18,6 @@ KEY_SURVIVAL_SEED: str = "seed"
 
 KEY_CURRENT_AGE: str = "current_age"
 
-KEY_STOCHASTIC: str = "stochastic"
 
 
 class StochasticConfigMapper(ConfigMapper):
@@ -46,8 +46,7 @@ class StochasticConfigMapper(ConfigMapper):
         params: Dict[str, Any] = super().map_yaml_to_params(data)
 
         stochastic: Dict[str, Any] = data[KEY_STOCHASTIC]
-
-        params[KEY_STOCHASTIC] = stochastic[KEY_STOCHASTIC]
+        params[KEY_SEED] = stochastic.get(KEY_SEED, None)
 
         # ----------------------
         # Survival process
