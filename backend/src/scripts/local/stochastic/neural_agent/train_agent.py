@@ -88,13 +88,16 @@ def plot_policy_heatmaps(
 
     # Find time index
     t_idx = np.where(np.array(agent.months) == inspection_date)[0]
+
     if len(t_idx) == 0:
         raise ValueError(f"inspection_date {inspection_date} not in agent.months")
+
     t_idx = t_idx[0]
 
     # Create grid
-    wealth_scaled_grid = np.linspace(0.0, agent.max_wealth_factor, n_wealth)
+    wealth_scaled_grid = np.linspace(0.0, 1.0, n_wealth)
     savings_frac_grid = np.linspace(0.0, 1.0, n_savings_frac)
+
     W_scaled, S_frac = np.meshgrid(wealth_scaled_grid, savings_frac_grid)
 
     # Flatten for batch
@@ -113,6 +116,8 @@ def plot_policy_heatmaps(
     state_tensor = state_tensor.to(next(agent.policy_net.parameters()).device)
 
     # Actions from policy network
+    agent.policy_net.eval()  # Turn off dropout and batchnorm randomness
+
     actions = agent.policy_net(state_tensor).detach().cpu().numpy()
     consumption_rate = actions[:, 0].reshape(n_savings_frac, n_wealth)
     savings_rate = actions[:, 1].reshape(n_savings_frac, n_wealth)
@@ -166,6 +171,7 @@ def train_agent(
     plot_results: bool = False,
     save: bool = False,
     device: str = "cpu",
+    print_diagnostics: bool = False
 ) -> float:
     """
     Train NeuralAgentWealthOptimizer with given hyperparameters.
@@ -249,9 +255,10 @@ def train_agent(
         first_month_date = agent.months[0]  # or choose any date
         plot_policy_heatmaps(agent, inspection_date=first_month_date)
 
-        agent.policy_net.plot_weight_distributions()
+        #agent.policy_net.plot_weight_distributions()
 
-    agent.policy_net.print_diagnostics(n_test=n_episodes)
+    if print_diagnostics:
+        agent.policy_net.print_diagnostics(n_test=n_episodes)
 
     # ----------------------------
     # Objective
@@ -268,7 +275,7 @@ if __name__ == "__main__":
     DEVICE = "cpu"
 
     hyperparams = {
-        HP_HIDDEN_LAYERS: [64, 64],
+        HP_HIDDEN_LAYERS: [64, 128, 64],
         HP_ACTIVATION: ACT_SOFTPLUS,
         HP_DROPOUT: 0.1,
         HP_LR: 0.001
@@ -278,8 +285,8 @@ if __name__ == "__main__":
         hyperparams=hyperparams,
         params_file_name=PARAMS_FILE,
         run_task_id=RUN_TASK_ID,
-        n_epochs=100,
-        n_episodes=7500,
+        n_epochs=25,
+        n_episodes=10000,
         plot_training=True,
         plot_results=True,
         save=True,

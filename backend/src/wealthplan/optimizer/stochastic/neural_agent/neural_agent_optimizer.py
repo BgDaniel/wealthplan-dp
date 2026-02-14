@@ -73,7 +73,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         saving_min: float,
         buy_pct: float,
         sell_pct: float,
-        max_wealth: float,
+        max_wealth_factor: float,
         initial_savings_fraction: float,
         use_cache: bool,
         seed: Optional[int] = None,
@@ -143,7 +143,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         self.buy_pct = buy_pct
         self.sell_pct = sell_pct
 
-        self.max_wealth: float = max_wealth
+        self.max_wealth_factor: float = max_wealth_factor
 
         self.max_allowed_wealth = (
             self.max_wealth_factor * (self.initial_wealth - self.saving_min)
@@ -171,7 +171,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         torch.Tensor
             Scaled wealth tensor of shape (batch_size,).
         """
-        return (wealth - self.saving_min) / (self.initial_wealth - self.saving_min)
+        return (wealth - self.saving_min) / (self.max_allowed_wealth - self.saving_min)
 
     def _get_savings_fraction(
         self, savings: torch.Tensor, wealth: torch.Tensor
@@ -240,20 +240,14 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         total_wealth = available_savings + available_stocks
 
         # Compute fractions using tensor operations
-        savings_frac = (available_savings - self.saving_min) / (
-            total_wealth - self.saving_min + 1e-8
-        )
-        # Optional: clip to [0,1] to avoid numerical issues
-        savings_frac = torch.clamp(savings_frac, 0.0, 1.0)
+        savings_frac = self._get_savings_fraction(available_savings, total_wealth)
 
-        # Min-max scaled total wealth
-        wealth_scaled = (total_wealth - self.saving_min) / (
-            self.initial_wealth - self.saving_min + 1e-8
-        )
-        wealth_scaled = torch.clamp(wealth_scaled, 0.0, self.max_wealth_factor)
+        # Scaled total wealth
+        wealth_scaled = self._get_wealth_scaled(total_wealth)
 
         # Normalized time
         batch_size = available_savings.shape[0]
+
         t_norm = torch.full(
             (batch_size,), t / self.n_months, dtype=torch.float32, device=self.device
         )
@@ -286,11 +280,12 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
         if mask_exceed.any():
             excess = total_wealth[mask_exceed] - self.max_allowed_wealth
-            frac_savings = (savings[mask_exceed] - self.saving_min) / (
-                total_wealth[mask_exceed] - self.saving_min
+
+            frac_savings = self._get_savings_fraction(
+                savings[mask_exceed], total_wealth[mask_exceed]
             )
-            frac_stocks = stocks[mask_exceed] / (
-                total_wealth[mask_exceed] - self.saving_min
+            frac_stocks = self._get_stocks_fraction(
+                stocks[mask_exceed], total_wealth[mask_exceed]
             )
 
             consumption[mask_exceed] += excess
@@ -302,6 +297,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             savings, torch.tensor(self.saving_min, device=savings.device)
         )
         stocks = torch.maximum(stocks, torch.tensor(0.0, device=stocks.device))
+
         return savings, stocks, consumption
 
     def _simulate_forward(
@@ -418,7 +414,9 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             stocks_after_transaction_costs = stocks_after - buy_cost - sell_cost
 
             # ---------- Death handling (NO inplace masking) ----------
-            consumption = torch.where(alive_mask, consumption, torch.zeros_like(consumption))
+            consumption = torch.where(
+                alive_mask, consumption, torch.zeros_like(consumption)
+            )
             savings_after = torch.where(alive_mask, savings_after, savings_prev)
             stocks_after = torch.where(alive_mask, stocks_after, stocks_prev)
 
@@ -454,6 +452,105 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         consumption_paths = torch.cat([consumption_paths, zero_last], dim=0)
 
         return savings_paths, stocks_paths, consumption_paths, wealth_paths
+
+    def plot(
+        self,
+        percentiles=(5, 10),
+        sample_sim=None,
+        title_size=22,
+        legend_size=16,
+        tick_size=16,
+    ):
+        """
+        Extended plot: Reuse base _create_plot() and additionally show savings & stocks
+        in the wealth subplot using the same _plot_with_bands function for consistency.
+
+        Parameters
+        ----------
+        percentiles : tuple[float, ...]
+            Percentile levels for shaded bands (e.g., (5,10) → 5-95%, 10-90%).
+        sample_sim : int or None
+            Index of the simulation to show as a sample path. Random if None.
+        title_size : int
+            Font size for subplot titles.
+        legend_size : int
+            Font size for legend.
+        tick_size : int
+            Font size for axis ticks.
+        """
+        # 1. Get base figure and axes (without showing)
+        fig, axes = super()._create_plot(
+            percentiles, sample_sim, title_size, legend_size, tick_size
+        )
+
+        ax_wealth = axes[1]  # wealth subplot
+
+        months = self.months
+        n_sims = len(self.opt_wealth.columns)
+
+        if sample_sim is None:
+            np.random.seed()
+            sample_sim = np.random.randint(n_sims)
+
+        # 2. Compute mean + percentile bands for savings and stocks
+        savings_mean, savings_bands = self.compute_mean_and_bands(
+            self.opt_savings, percentiles
+        )
+        stocks_mean, stocks_bands = self.compute_mean_and_bands(
+            self.opt_stocks, percentiles
+        )
+
+        # 3. Plot savings using base helper
+        self.plot_with_bands(
+            ax_wealth,
+            months,
+            savings_mean,
+            savings_bands,
+            color="orange",
+            title="Wealth Over Time",
+            title_size=title_size,
+            legend_size=legend_size,
+            tick_size=tick_size,
+        )
+
+        # 4. Plot stocks using base helper
+        self.plot_with_bands(
+            ax_wealth,
+            months,
+            stocks_mean,
+            stocks_bands,
+            color="purple",
+            title="Wealth Over Time",
+            title_size=title_size,
+            legend_size=legend_size,
+            tick_size=tick_size,
+        )
+
+        # 5. Plot sample paths
+        savings_sample = self.opt_savings.iloc[:, sample_sim]
+        stocks_sample = self.opt_stocks.iloc[:, sample_sim]
+        ax_wealth.plot(
+            months,
+            savings_sample,
+            color="orange",
+            lw=1,
+            alpha=0.7,
+            label="Savings Sample",
+        )
+        ax_wealth.plot(
+            months,
+            stocks_sample,
+            color="purple",
+            lw=1,
+            alpha=0.7,
+            label="Stocks Sample",
+        )
+
+        # 6. Update legend
+        ax_wealth.legend(fontsize=legend_size)
+
+        # 7. Show figure
+        plt.show()
 
     def train(
         self,
@@ -514,24 +611,20 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
         # Convert to DataFrames immediately
         self.opt_savings = pd.DataFrame(
-            savings_paths.detach().cpu().numpy(),
-            index=self.months
+            savings_paths.detach().cpu().numpy(), index=self.months
         )
 
         self.opt_stocks = pd.DataFrame(
-            stocks_paths.detach().cpu().numpy(),
-            index=self.months
+            stocks_paths.detach().cpu().numpy(), index=self.months
         )
 
         self.opt_wealth = pd.DataFrame(
-            wealth_paths.detach().cpu().numpy(),
-            index=self.months
+            wealth_paths.detach().cpu().numpy(), index=self.months
         )
 
         # consumption is one month shorter
         self.opt_consumption = pd.DataFrame(
-            consumption_paths.detach().cpu().numpy(),
-            index=self.months
+            consumption_paths.detach().cpu().numpy(), index=self.months
         )
 
         # === Plot training curve ===
