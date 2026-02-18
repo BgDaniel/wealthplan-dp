@@ -1,12 +1,10 @@
 import datetime as dt
-from typing import List, Tuple, Optional, OrderedDict
+from typing import List, Tuple, Optional
 import numpy as np
 import pandas as pd
-import torch.nn.functional as F
 import torch
 import torch.optim as optim
 from matplotlib import pyplot as plt
-from tqdm import trange
 
 from result_cache.result_cache import ResultCache
 from wealthplan.cashflows.cashflow_base import CashflowBase
@@ -410,7 +408,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
             buy_cost = torch.where(delta > 0, delta * self.buy_pct / 100.0, 0.0)
             sell_cost = torch.where(delta < 0, (-delta) * self.sell_pct / 100.0, 0.0)
 
-            stocks_after_transaction_costs = stocks_after - buy_cost - sell_cost
+            stocks_after = stocks_after - buy_cost - sell_cost
 
             # ---------- Death handling (NO inplace masking) ----------
             consumption = torch.where(

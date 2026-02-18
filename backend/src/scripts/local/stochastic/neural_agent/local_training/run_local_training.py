@@ -17,20 +17,20 @@ if __name__ == "__main__":
         n_epochs=50,
         n_episodes=10000,
         lambda_penalty=1.0,
-        terminal_penalty=0.00
+        terminal_penalty=0.05
     )
 
     local_trainer = LocalTrainer(
         run_id=RUN_ID,
         config_yaml=PARAMS_FILE,
         hyperparams=hyperparams,
-        use_cache=True
+        use_cache=False
     )
 
     mean_opt_consumption, trained_agent, epoch_rewards = local_trainer.train_agent()
     print(f"Local training completed. Optimized, mean consumption: {mean_opt_consumption:.1f}")
 
     trained_agent.plot_wealth_evolution()
-    trained_agent.plot_neuronal_net(inspection_date=dt.date(2026, 1, 1))
+    trained_agent.plot_neuronal_net(inspection_date=dt.date(2026, 7, 1))
 
     plot_training_progress(epoch_rewards)
