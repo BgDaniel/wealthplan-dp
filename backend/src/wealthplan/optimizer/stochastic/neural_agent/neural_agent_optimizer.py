@@ -26,21 +26,6 @@ from wealthplan.optimizer.stochastic.survival_process.survival_process import (
 EPS: float = 10e-1
 
 
-def crra_utility_torch(
-    consumption: torch.Tensor, gamma: float, eps: float = 1e-8
-) -> torch.Tensor:
-    """
-    CRRA utility in PyTorch, gradient-compatible.
-
-    u(c) = (c + eps)^(1 - gamma) / (1 - gamma)   if gamma != 1
-           log(c + eps)                           if gamma == 1
-    """
-    if gamma == 1.0:
-        return torch.log(consumption + eps)
-    else:
-        return ((consumption + eps) ** (1 - gamma)) / (1 - gamma)
-
-
 class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
     """
     Neural-network agent-based wealth-consumption optimizer with two assets.
@@ -156,6 +141,20 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
         self.use_cache = use_cache
         self.cache = ResultCache(run_id=run_config_id, enabled=self.use_cache)
+
+    def crra_utility_torch(
+            self, consumption: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        CRRA utility in PyTorch, gradient-compatible.
+
+        u(c) = (c + eps)^(1 - gamma) / (1 - gamma)   if gamma != 1
+               log(c + eps)                           if gamma == 1
+        """
+        if self.gamma == 1.0:
+            return torch.log(consumption + self.epsilon)
+        else:
+            return ((consumption + self.epsilon) ** (1 - self.gamma)) / (1 - self.gamma)
 
     def _get_wealth_scaled(self, wealth: torch.Tensor) -> torch.Tensor:
         """
@@ -453,7 +452,7 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
 
         return savings_paths, stocks_paths, consumption_paths, wealth_paths
 
-    def plot(
+    def plot_wealth_evolution(
         self,
         percentiles=(5, 10),
         sample_sim=None,
@@ -696,87 +695,91 @@ class NeuralAgentWealthOptimizer(StochasticOptimizerBase):
         fig2.tight_layout()
         plt.show()
 
-    def train(
+    def plot_neuronal_net(
         self,
-        n_epochs: int = 500,
-        n_episodes: int = 5000,
-        lambda_penalty: float = 1.0,
-        plot: bool = True,
-    ) -> None:
+        inspection_date: dt.date,
+        n_wealth: int = 500,
+        n_savings_frac: int = 500,
+    ):
         """
-        Train the policy network using fully differentiable
-        Monte Carlo policy optimization.
-
-        Each epoch:
-            - Simulates `n_episodes` wealth paths
-            - Computes CRRA utility
-            - Applies softplus penalty to negative wealth
-            - Performs one gradient ascent step
-
-        Parameters
-        ----------
-        n_epochs : int
-            Number of training epochs (optimizer steps).
-        n_episodes : int
-            Number of simulated episodes per epoch.
-            This is your Monte Carlo batch size.
-        lambda_penalty : float
-            Strength of the soft constraint for negative wealth.
-            Higher values enforce stronger non-negativity.
-        plot : bool
-            Whether to plot training progress.
+        Plot the trained neural network policy as 3D surfaces for consumption and savings actions.
+        Two-row layout, cleaner axes, shades of red/blue, formatted ticks.
         """
 
-        epoch_rewards: List[float] = []
+        # Find time index
+        t_idx = np.where(np.array(self.months) == inspection_date)[0]
+        if len(t_idx) == 0:
+            raise ValueError(f"inspection_date {inspection_date} not in months")
+        t_idx = t_idx[0]
 
-        for _ in trange(n_epochs, desc="Training Epochs"):
-            # === Forward simulation (fully in torch) ===
-            savings_paths, stocks_paths, consumption_paths, wealth_paths = (
-                self._simulate_forward(batch_size=n_episodes)
-            )
+        # Create grid
+        wealth_scaled_grid = np.linspace(0.0, 1.0, n_wealth)
+        savings_frac_grid = np.linspace(0.0, 1.0, n_savings_frac)
+        W_scaled, S_frac = np.meshgrid(wealth_scaled_grid, savings_frac_grid)
 
-            # === Utility ===
-            rewards = crra_utility_torch(consumption_paths, self.gamma, self.epsilon)
+        # Flatten for batch
+        W_flat = W_scaled.ravel()
+        S_frac_flat = S_frac.ravel()
 
-            # === Softplus penalty for negative wealth ===
-            # penalizes only when wealth < 0
-            penalty = F.softplus(-wealth_paths)
+        # Normalized time feature
+        t_norm = np.full_like(W_flat, fill_value=t_idx / self.n_months, dtype=np.float32)
 
-            # === Objective ===
-            total_reward = rewards.mean() - lambda_penalty * penalty.mean()
+        # Build state tensor
+        state_tensor = torch.from_numpy(
+            np.stack([S_frac_flat, W_flat, t_norm], axis=1)
+        ).float().to(next(self.policy_net.parameters()).device)
 
-            # === Gradient ascent ===
-            self.optimizer.zero_grad()
-            loss = -total_reward
-            loss.backward()
-            self.optimizer.step()
+        # Actions from policy network
+        self.policy_net.eval()
+        actions = self.policy_net(state_tensor).detach().cpu().numpy()
+        consumption_rate = actions[:, 0].reshape(n_savings_frac, n_wealth)
+        savings_rate = actions[:, 1].reshape(n_savings_frac, n_wealth)
 
-            epoch_rewards.append(total_reward.item())
+        # -------------------------
+        # Plot in two rows
+        # -------------------------
+        fig = plt.figure(figsize=(14, 12))
 
-        # Convert to DataFrames immediately
-        self.opt_savings = pd.DataFrame(
-            savings_paths.detach().cpu().numpy(), index=self.months
+        # ---- Row 1: Consumption ----
+        ax1 = fig.add_subplot(2, 1, 1, projection="3d")
+        surf1 = ax1.plot_surface(
+            W_scaled,
+            S_frac,
+            consumption_rate,
+            cmap="Reds",
+            linewidth=0,
+            antialiased=True,
         )
+        ax1.set_xlabel("Wealth (scaled)")
+        ax1.set_ylabel("Savings Fraction")
+        ax1.set_zlabel("Consumption Rate")
+        ax1.set_title("Policy: Consumption Rate", pad=20)
+        ax1.yaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+        ax1.xaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+        ax1.zaxis.set_major_formatter(lambda v, _: f"{v:.2f}" if abs(v) >= 0.01 else f"{v:.2e}")
+        fig.colorbar(surf1, ax=ax1, shrink=0.6, aspect=15)
 
-        self.opt_stocks = pd.DataFrame(
-            stocks_paths.detach().cpu().numpy(), index=self.months
+        # ---- Row 2: Savings Transfer ----
+        ax2 = fig.add_subplot(2, 1, 2, projection="3d")
+        surf2 = ax2.plot_surface(
+            W_scaled,
+            S_frac,
+            savings_rate,
+            cmap="Blues",
+            linewidth=0,
+            antialiased=True,
         )
+        ax2.set_xlabel("Wealth (scaled)")
+        ax2.set_ylabel("Savings Fraction")
+        ax2.set_zlabel("Savings Transfer Rate")
+        ax2.set_title("Policy: Savings Transfer Rate", pad=20)
+        ax2.yaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+        ax2.xaxis.set_major_formatter(lambda v, _: f"{v:.2f}")
+        ax2.zaxis.set_major_formatter(lambda v, _: f"{v:.2f}" if abs(v) >= 0.01 else f"{v:.2e}")
+        fig.colorbar(surf2, ax=ax2, shrink=0.6, aspect=15)
 
-        self.opt_wealth = pd.DataFrame(
-            wealth_paths.detach().cpu().numpy(), index=self.months
-        )
+        # Super title with space above
+        fig.suptitle(f"Policy surfaces at inspection date: {inspection_date}", fontsize=16, y=0.95)
+        plt.tight_layout(pad=3.0)
+        plt.show()
 
-        # consumption is one month shorter
-        self.opt_consumption = pd.DataFrame(
-            consumption_paths.detach().cpu().numpy(), index=self.months
-        )
-
-        # === Plot training curve ===
-        if plot:
-            plt.figure(figsize=(10, 6))
-            plt.plot(epoch_rewards)
-            plt.xlabel("Epoch")
-            plt.ylabel("Mean Penalized Reward")
-            plt.title("Training Progress")
-            plt.grid(True)
-            plt.show()

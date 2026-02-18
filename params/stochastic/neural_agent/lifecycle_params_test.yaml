@@ -40,8 +40,8 @@ stochastic:
   seed: null
 
   gbm_returns:
-    yearly_return: 0.05
-    sigma: 0.4
+    yearly_return: 0.1
+    sigma: 0.04
 
   survival_model:
     b: 9.5e-5
