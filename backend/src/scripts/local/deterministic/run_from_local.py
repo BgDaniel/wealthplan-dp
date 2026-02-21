@@ -13,15 +13,15 @@ def main(
 ) -> None:
     """
     Run a deterministic Bellman optimizer for a lifecycle consumption–wealth
-    planning problem using parameters loaded from a local YAML file.
+    planning problem using parameters loaded from a local_training YAML file.
 
     Args:
-        params_file_name: Name of the YAML file to load from the local parameters path.
+        params_file_name: Name of the YAML file to load from the local_training parameters path.
         run_task_id (str): Optional task ID to tag outputs. Defaults to empty string.
         plot: If True, will plot the results after solving.
     """
     # ----------------------------
-    # Load configuration from local YAML
+    # Load configuration from local_training YAML
     # ----------------------------
     io_handler = LocalIOHandler(params_file_name=params_file_name)
 

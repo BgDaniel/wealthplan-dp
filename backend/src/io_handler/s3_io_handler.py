@@ -143,19 +143,19 @@ class S3IOHandler(AbstractIOHandler):
 
     def upload_params(self, param_file_name: str) -> None:
         """
-        Upload a local YAML file to S3 under the parameters prefix.
+        Upload a local_training YAML file to S3 under the parameters prefix.
 
         Parameters
         ----------
         param_file_name : str
-            Name of the local YAML file to upload.
+            Name of the local_training YAML file to upload.
 
         Raises
         ------
         EnvironmentError
             If PARAMS_FOLDER_ENV is not set.
         FileNotFoundError
-            If the local file does not exist.
+            If the local_training file does not exist.
         """
         params_folder: Optional[str] = os.getenv(PARAMS_FOLDER_ENV)
 

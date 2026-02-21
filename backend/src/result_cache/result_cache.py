@@ -16,7 +16,7 @@ class ResultCache:
     Local filesystem cache for Bellman optimizer results.
 
     This cache stores intermediate results (value function and policy)
-    per time step (date) as pickle files on the local filesystem.
+    per time step (date) as pickle files on the local_training filesystem.
 
     The cache can be enabled or disabled via the ``enabled`` flag.
     When disabled, all cache operations become no-ops.
@@ -27,7 +27,7 @@ class ResultCache:
 
     def __init__(self, run_id: str, *, enabled: bool = True) -> None:
         """
-        Initialize a local result cache for a given optimizer run.
+        Initialize a local_training result cache for a given optimizer run.
 
         Parameters
         ----------

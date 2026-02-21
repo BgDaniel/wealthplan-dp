@@ -90,7 +90,7 @@ class SimplePolicyNetwork(nn.Module):
         Diagnostics include:
         - weight statistics (mean/std/max per parameter tensor)
         - activation statistics across layers
-        - local smoothness test via small input perturbations
+        - local_training smoothness test via small input perturbations
 
         Parameters
         ----------

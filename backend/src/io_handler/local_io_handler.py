@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 class LocalIOHandler(AbstractIOHandler):
     """
     Local IO Handler:
-    - Loads YAML from local folder defined via environment variable
-    - Saves results to a local output directory, optionally organized by run_id
+    - Loads YAML from local_training folder defined via environment variable
+    - Saves results to a local_training output directory, optionally organized by run_id
     """
 
     def __init__(self, params_file_name: str) -> None:
         """
-        Initialize the local IO handler.
+        Initialize the local_training IO handler.
 
         Parameters
         ----------
@@ -45,7 +45,7 @@ class LocalIOHandler(AbstractIOHandler):
 
     def load_params(self) -> dict[str, Any]:
         """
-        Load a YAML configuration file from the local base path (PARAMETERIZATION_FOLDER_ENV)
+        Load a YAML configuration file from the local_training base path (PARAMETERIZATION_FOLDER_ENV)
         and map it to optimizer parameters.
 
         Returns
@@ -74,7 +74,7 @@ class LocalIOHandler(AbstractIOHandler):
 
     def save_results(self, results: pd.DataFrame, run_config_id: str, run_task_id: str = "") -> None:
         """
-        Save a Pandas DataFrame as CSV in the local output directory under a run-specific subfolder.
+        Save a Pandas DataFrame as CSV in the local_training output directory under a run-specific subfolder.
 
         Parameters
         ----------

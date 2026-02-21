@@ -1,4 +1,5 @@
 import os
+from dataclasses import asdict
 from typing import Dict, Tuple, Optional, List, Any
 
 import pandas as pd
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from matplotlib import pyplot as plt
 from tqdm import trange
 
+from config.stochastic.neural_agent.neural_agent_config_mapper import NeuralAgentConfigMapper
 from wealthplan.optimizer.stochastic.neural_agent.neural_agent_optimizer import NeuralAgentWealthOptimizer
 from wealthplan.optimizer.stochastic.neural_agent.simple_policy_network import SimplePolicyNetwork
 from scripts.local.stochastic.neural_agent.cache.base_cache import TrainingAgentCache
@@ -64,7 +66,7 @@ def plot_training_progress(epoch_rewards: List[float], plot_config: Dict[str, An
 
 def train_agent(
     run_id: str,
-    life_cycle_params: Dict[str, object],
+    life_cycle_dict: Dict[str, object],
     hyperparams: Dict[str, object],
     device: str = "cpu",
     cache: Optional[TrainingAgentCache] = None,
@@ -103,6 +105,10 @@ def train_agent(
     # ------------------------------------------------------------
     # Initialize agent
     # ------------------------------------------------------------
+    life_cycle_params = NeuralAgentConfigMapper.map_yaml_to_params(
+        life_cycle_dict
+    )
+
     agent = NeuralAgentWealthOptimizer(**life_cycle_params)
 
     activation_cls = ACTIVATIONS[hyperparams.activation]
@@ -182,10 +188,10 @@ def train_agent(
         )
 
     # ------------------------------------------------------------
-    # Save to cache OR fallback to local dir
+    # Save to cache OR fallback to local_training dir
     # ------------------------------------------------------------
     if cache is not None and run_id is not None:
-        cache.save(run_id, agent, epoch_rewards)
+        cache.save(run_id, agent, epoch_rewards, life_cycle_dict, asdict(hyperparams))
 
     # ------------------------------------------------------------
     # Objective
