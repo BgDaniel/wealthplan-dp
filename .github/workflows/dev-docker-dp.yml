@@ -31,7 +31,7 @@ jobs:
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
 
       - name: Build Docker image
-        run: docker build -t $IMAGE_NAME:dev-latest -f docker/dev/Dockerfile .
+        run: docker build -t $IMAGE_NAME:dev-latest -f docker/wealthplan-dp/dev/Dockerfile .
 
       - name: Tag Docker image for ECR
         run: docker tag $IMAGE_NAME:dev-latest $ECR_REPO:dev-latest

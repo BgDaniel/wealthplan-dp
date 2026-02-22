@@ -23,7 +23,7 @@ RUN echo "Working directory set to /app"
 RUN pip install --no-cache-dir poetry && echo "Poetry installed"
 
 # 4️⃣ Copy Poetry files first (for caching dependencies if unchanged)
-COPY ../../pyproject.toml ../../poetry.lock /app/
+COPY ../../../pyproject.toml ../../poetry.lock /app/
 RUN echo "Poetry files copied"
 
 # 5️⃣ Configure Poetry to install packages system-wide
@@ -33,7 +33,7 @@ RUN poetry config virtualenvs.create false && echo "Poetry configured to avoid v
 RUN poetry install --only main --no-root --no-interaction --no-ansi && echo "Dependencies installed"
 
 # 7️⃣ Copy source code into the container
-COPY ../../backend/src /app/src/
+COPY ../../../backend/src /app/src/
 RUN echo "Source code copied"
 
 # 8️⃣ Set PYTHONPATH so imports from src/ work

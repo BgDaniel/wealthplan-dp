@@ -3,9 +3,20 @@ from typing import Dict, Any, Optional
 import boto3
 import io
 import logging
+import datetime as dt
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+class DateJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle datetime.date objects."""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, dt.date):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class S3FileHandler:
@@ -47,7 +58,7 @@ class S3FileHandler:
         s3_key : str
             Full S3 key (path + filename) where the JSON will be stored.
         """
-        buffer = io.BytesIO(json.dumps(data, indent=2).encode("utf-8"))
+        buffer = io.BytesIO(json.dumps(data, indent=2, cls=DateJSONEncoder).encode("utf-8"))
 
         self.s3.upload_fileobj(buffer, self.bucket, s3_key)
 
@@ -71,7 +82,22 @@ class S3FileHandler:
         self.s3.download_fileobj(self.bucket, s3_key, buffer)
 
         buffer.seek(0)
-        data: Dict[str, Any] = json.load(buffer)
+
+        def parse_dates(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return {k: parse_dates(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [parse_dates(v) for v in obj]
+            elif isinstance(obj, str):
+                try:
+                    return dt.date.fromisoformat(obj)
+                except ValueError:
+                    return obj
+            else:
+                return obj
+
+        data_raw: Dict[str, Any] = json.load(buffer)
+        data: Dict[str, Any] = parse_dates(data_raw)
 
         logger.info(f"Downloaded JSON from s3://{self.bucket}/{s3_key}")
 

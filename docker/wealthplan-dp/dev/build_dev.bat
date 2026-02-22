@@ -10,7 +10,7 @@ REM Project root folder (assumes this batch file is in docker/dev/)
 SET PROJECT_ROOT=C:\Projects\wealthplan-dp
 
 REM Path to Dockerfile relative to the project root
-SET DOCKERFILE=%PROJECT_ROOT%\docker\dev\Dockerfile
+SET DOCKERFILE=%PROJECT_ROOT%\docker\wealthplan-dp\dev\Dockerfile
 
 echo Building Docker image %IMAGE_NAME% using %DOCKERFILE% with context %PROJECT_ROOT%
 

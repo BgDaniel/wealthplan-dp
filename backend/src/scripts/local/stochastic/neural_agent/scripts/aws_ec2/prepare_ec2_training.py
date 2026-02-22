@@ -1,17 +1,18 @@
 import uuid
 from dataclasses import asdict
 from typing import Dict, Any
-from sagemaker.pytorch import PyTorch
 
 
 from io_handler.local_io_handler import LocalIOHandler
 from scripts.local.stochastic.neural_agent.core.hyper_params import HyperParameters
-from scripts.local.stochastic.neural_agent.scripts.sagemaker_training.s3_file_handler import S3FileHandler
+from scripts.local.stochastic.neural_agent.scripts.aws_ec2.run_training import build_lifecycle_file_path, \
+    build_hyperparams_file_path
+from scripts.local.stochastic.neural_agent.scripts.aws_ec2.s3_file_handler import S3FileHandler
 
 
 ROLE: str = "arn:aws:iam::<account-id>:role/SageMakerExecutionRole"
 BUCKET: str = "wealthplan-neural-agent-dev"
-ENTRY_POINT: str = "sagemaker_entrypoint.py"
+ENTRY_POINT: str = "run_training.py"
 SOURCE_DIR: str = "."
 INSTANCE_TYPE: str = "ml.g4dn.xlarge"
 INSTANCE_COUNT: int = 1
@@ -20,7 +21,7 @@ PY_VERSION: str = "py39"
 WAIT: bool = True  # Whether to block until training job completes
 
 
-def main() -> None:
+def prepare_ec2_training() -> None:
     """
     Launch a SageMaker training job for the NeuralAgent.
 
@@ -32,10 +33,12 @@ def main() -> None:
     # -------------------------
     # Run configuration
     # -------------------------
-    run_id: str = uuid.uuid5(uuid.NAMESPACE_DNS, "sagemaker_test_run").hex
+    run_id: str = uuid.uuid5(uuid.NAMESPACE_DNS, "sagemaker_test_run").hex[:8]
 
-    lifecycle_file: str = f"input/{run_id}/lifecycle_params.json"
-    hyperparams_file: str = f"input/{run_id}/hyperparams.json"
+    print(f"[INFO] Using run ID: {run_id}")
+
+    lifecycle_file: str = build_lifecycle_file_path(run_id)
+    hyperparams_file: str = build_hyperparams_file_path(run_id)
 
     # -------------------------
     # Load local_training lifecycle params
@@ -65,29 +68,6 @@ def main() -> None:
     )
     s3_handler.upload_dict(asdict(hyperparams), hyperparams_file)
 
-    # -------------------------
-    # SageMaker Estimator
-    # -------------------------
-    estimator: PyTorch = PyTorch(
-        entry_point=ENTRY_POINT,
-        source_dir=SOURCE_DIR,
-        role=ROLE,
-        instance_count=INSTANCE_COUNT,
-        instance_type=INSTANCE_TYPE,
-        framework_version=FRAMEWORK_VERSION,
-        py_version=PY_VERSION,
-        hyperparameters={
-            "RUN_ID": run_id,
-            "S3_BUCKET": BUCKET,
-            "PARAMS_FILE": lifecycle_file,
-            "HYPERPARAMS_FILE": hyperparams_file,
-        },
-    )
-
-    # Submit the training job
-    estimator.fit(wait=WAIT)
-    print(f"[INFO] SageMaker training job submitted with run ID: {run_id}")
-
 
 if __name__ == "__main__":
-    main()
+    prepare_ec2_training()
