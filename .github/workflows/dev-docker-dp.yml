@@ -5,6 +5,7 @@ on:
 
 env:
   IMAGE_NAME: wealthplan-dp-dev
+  ECR_NAME: wealthplan-dp-dev
   AWS_ACCOUNT_ID: 287034252540
   AWS_REGION: eu-central-1
 
@@ -24,7 +25,7 @@ jobs:
 
       - name: Compute ECR_REPO
         run: |
-          echo "ECR_REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${IMAGE_NAME}" >> $GITHUB_ENV
+          echo "ECR_REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_NAME}" >> $GITHUB_ENV
 
       - name: Log in to Amazon ECR
         run: |
