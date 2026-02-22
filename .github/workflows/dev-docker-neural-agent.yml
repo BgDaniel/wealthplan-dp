@@ -1,4 +1,4 @@
-name: Dev Docker Build
+name: Dev Docker Build Neural Agent
 
 on:
   workflow_dispatch:  # Manual trigger
