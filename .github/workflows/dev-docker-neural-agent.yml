@@ -5,7 +5,7 @@ on:
 
 env:
   IMAGE_NAME: wealthplan-neural-agent-dev
-  ECR_NAME: wealthplan-neural-agent
+  ECR_NAME: wealthplan-dp-dev
   AWS_ACCOUNT_ID: 287034252540
   AWS_REGION: eu-central-1
 
