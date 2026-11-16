@@ -17,7 +17,7 @@ from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import (
 from wealthplan.optimizer.math_tools.utility_functions import crra_utility
 from wealthplan.optimizer.stochastic.wealth_regression.wealth_regression import WealthRegressor
 
-PARAMS = Path(__file__).resolve().parents[6] / "params" / "lifecycle_params.yaml"
+PARAMS = Path(__file__).resolve().parents[6] / "params" / "baseline_retire_67.yaml"
 
 
 def small_params(**technical) -> dict:

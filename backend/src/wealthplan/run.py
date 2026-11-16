@@ -1,6 +1,6 @@
 """Run a plan from a YAML parameter file and save the results.
 
-    python -m wealthplan.run params/lifecycle_params.yaml [--results results] [--no-figures]
+    python -m wealthplan.run params/baseline_retire_67.yaml [--results results] [--no-figures]
 
 Output folder ``<results>/<timestamp>_<run_config_id>/``:
 summary.json, quantiles.csv, cashflows.csv (items per month), policy.npz (for ``decide``),

@@ -115,5 +115,29 @@ class TestTotalPension(unittest.TestCase):
         self.assertEqual(self.pension.stochastic_net_payout(dt.date(2030, 1, 1), np.array([gross]))[0], 0.0)
 
 
+class TestEarlyRetirement(unittest.TestCase):
+    """Contributions end before the pension start; scheduled expenses."""
+
+    def test_gap_between_contributions_and_pensions(self) -> None:
+        from wealthplan.cashflows.scheduled_expense import ScheduledExpense
+
+        stop, start = dt.date(2033, 7, 1), dt.date(2055, 7, 1)
+        rurup = RuerupPension(name="Rürup", monthly_contribution_amount=600.0, start_date=dt.date(2026, 1, 1),
+                              pension_start=start, contribution_end=stop, fund_linked=False)
+        full = RuerupPension(name="Rürup", monthly_contribution_amount=600.0, start_date=dt.date(2026, 1, 1),
+                             pension_start=start, fund_linked=False)
+        pension = TotalPension([PublicPensionPlan(monthly_payout_brutto=1500.0), rurup], start,
+                               contributions_end=stop)
+        self.assertIn("Rürup contribution", pension.components(dt.date(2033, 6, 1)))
+        self.assertEqual(pension.components(dt.date(2040, 1, 1)), {})  # gap: nothing paid, nothing received
+        self.assertIn("Public pension (gross)", pension.components(dt.date(2056, 1, 1)))
+        self.assertEqual(rurup.monthly_contribution(dt.date(2033, 7, 1)), 0.0)
+        self.assertLess(rurup.capital_at_pension_start(), full.capital_at_pension_start())
+        hk = ScheduledExpense("Health", 450.0, stop, start)
+        self.assertEqual(hk.cashflow(dt.date(2033, 6, 1)), 0.0)
+        self.assertEqual(hk.cashflow(dt.date(2040, 1, 1)), -450.0)
+        self.assertEqual(hk.cashflow(start), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

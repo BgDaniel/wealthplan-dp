@@ -36,7 +36,7 @@ poetry run streamlit run app/streamlit_app.py
 ## CLI
 
 ```bash
-poetry run python -m wealthplan.run params/lifecycle_params.yaml
+poetry run python -m wealthplan.run params/baseline_retire_67.yaml
 ```
 
 writes `results/<timestamp>_<run_config_id>/` with `summary.json`, `quantiles.csv`,
@@ -48,7 +48,7 @@ import yaml
 from config.stochastic.lsmc.lsmc_config_mapper import LSMCConfigMapper
 from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import LSMCBellmanOptimizer
 
-params = LSMCConfigMapper.map_yaml_to_params(yaml.safe_load(open("params/lifecycle_params.yaml")))
+params = LSMCConfigMapper.map_yaml_to_params(yaml.safe_load(open("params/baseline_retire_67.yaml")))
 opt = LSMCBellmanOptimizer(**params)
 opt.solve()
 opt.summary(); opt.quantiles(); opt.plot()
@@ -120,6 +120,14 @@ fixed salary (marginal tax). The Rürup refund is computed exactly (tax without 
 deduction, room = Höchstbetrag − 2 × pension contributions). `mode: net`: `monthly_net` plus
 `bonus_net`. Fixed costs for the emergency reserve exclude the income tax and social security
 deducted from salary and pensions.
+
+## Early retirement (`params/early_retirement_45.yaml`)
+
+`simulation_parameters.retirement_date` and `lifecycle.salary.retirement_date` mark the end of the
+working life; `total_pension.retirement_date` is the pension start and
+`total_pension.contributions_end_date` the end of all pension contributions (default: the pension
+start). `lifecycle.other_expenses` holds monthly expenses with optional `start_date` / `end_date`,
+e.g. the voluntary health insurance between both dates.
 
 ## Inflation (YAML section `inflation`, `wealthplan.economy.inflation`)
 

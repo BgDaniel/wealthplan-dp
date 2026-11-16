@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Type
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.payroll import GrossSalary, NetSalary, PayrollModel
+from wealthplan.cashflows.scheduled_expense import ScheduledExpense
 from wealthplan.cashflows.rent import Rent
 from wealthplan.cashflows.electricity import Electricity
 from wealthplan.cashflows.telecommunication import Telecommunication
@@ -146,6 +147,7 @@ class ConfigMapper:
         cashflows: List[CashflowBase] = [salary] if salary is not None else []
         cashflows.extend(cls._load_lifecycle_cashflows(data))
         cashflows.extend(cls._load_insurances(data))
+        cashflows.extend(cls._load_scheduled_expenses(data))
         cashflows = cls._index_cashflows(cashflows, inflation, sim[KEY_START_DATE])
         cashflows.extend(cls._load_total_pension(data, tax, inflation, salary))
 
@@ -251,6 +253,13 @@ class ConfigMapper:
         return out
 
     @staticmethod
+    def _load_scheduled_expenses(data: Dict[str, Any]) -> List[CashflowBase]:
+        """``lifecycle.other_expenses``: monthly expenses with optional start / end date."""
+        cfg = data.get(KEY_LIFECYCLE, {}).get("other_expenses", []) or []
+        return [ScheduledExpense(name=e["name"], monthly_amount=float(e["monthly_amount"]),
+                                 start_date=e.get("start_date"), end_date=e.get("end_date")) for e in cfg]
+
+    @staticmethod
     def _load_insurances(data: Dict[str, Any]) -> List[CashflowBase]:
         """
         Instantiate insurance cashflows.
@@ -290,6 +299,8 @@ class ConfigMapper:
             return []
 
         retirement_date = cfg[KEY_RETIREMENT_DATE]
+        # end of all contributions (early retirement); default: the pension start
+        contributions_end = cfg.get("contributions_end_date", retirement_date)
         pension_plans: List[CashflowBase] = []
 
         # Private pension plans
@@ -334,6 +345,7 @@ class ConfigMapper:
                     monthly_contribution_amount=float(p["monthly_contribution"]),
                     start_date=p.get(KEY_START_DATE_PLAN, data[KEY_SIMULATION][KEY_START_DATE]),
                     pension_start=retirement_date,
+                    contribution_end=contributions_end,
                     contribution_growth=float(p.get("contribution_growth", 0.0)),
                     expected_return=float(p.get("expected_return", 0.06)),
                     running_costs=float(p.get("running_costs", 0.012)),
@@ -346,7 +358,8 @@ class ConfigMapper:
 
         return [TotalPension(pensions=pension_plans, retirement_date=retirement_date, tax=tax,
                              tax_scale=inflation.tax_scale if inflation else None,
-                             refund=_payroll_refund(salary) if isinstance(salary, GrossSalary) else None)]
+                             refund=_payroll_refund(salary) if isinstance(salary, GrossSalary) else None,
+                             contributions_end=contributions_end)]
 
     @staticmethod
     def _load_crra_params(data: Dict[str, Any]) -> Dict[str, float]:

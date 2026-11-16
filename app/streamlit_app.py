@@ -758,7 +758,8 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             c1, c2, c3, c4 = st.columns(4)
             start = c1.date_input("Start", _as_date(sim["start_date"]))
             end = c2.date_input("End", _as_date(sim["end_date"]), max_value=date(2150, 1, 1))
-            retirement = c3.date_input("Retirement", _as_date(sim["retirement_date"]), max_value=date(2150, 1, 1))
+            retirement = c3.date_input("End of working life", _as_date(sim["retirement_date"]),
+                                       max_value=date(2150, 1, 1), help="last salary in the month before")
             age = c4.number_input("Age at start", value=float(sim.get("current_age", 40.0)), min_value=0.0,
                                   max_value=110.0, step=0.5)
             wealth0 = _money_input(c1, "Initial wealth [€]", float(sim["initial_wealth"]))
@@ -812,6 +813,18 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             groceries = _money_input(c3, "Groceries [€/month]", float(life.get("groceries", {}).get( "monthly_amount", 0.0)))
             electricity = _money_input(c1, "Electricity [€/month]", float(life.get("electricity", {}).get( "monthly_amount", 0.0)))
             telecom = _money_input(c2, "Telecommunication [€/month]", float(life.get( "telecommunication", {}).get("monthly_amount", 0.0)))
+            st.caption("Other expenses with a time window (e.g. voluntary health insurance after an early "
+                       "retirement); empty dates = whole horizon")
+            other = st.data_editor(
+                pd.DataFrame([{"name": e.get("name", ""), "monthly_amount": float(e.get("monthly_amount", 0.0)),
+                               "start_date": _as_date(e["start_date"]) if e.get("start_date") else None,
+                               "end_date": _as_date(e["end_date"]) if e.get("end_date") else None}
+                              for e in life.get("other_expenses", []) or []],
+                             columns=["name", "monthly_amount", "start_date", "end_date"]),
+                num_rows="dynamic", width="stretch", key=f"other_{name}",
+                column_config={"monthly_amount": st.column_config.NumberColumn("monthly amount [€]", min_value=0.0),
+                               "start_date": st.column_config.DateColumn("start"),
+                               "end_date": st.column_config.DateColumn("end")})
             st.caption("Insurances (frequency M = monthly, Y = yearly in January)")
             insurances = st.data_editor(
                 pd.DataFrame(life.get("insurances", []), columns=["name", "amount", "frequency"]),
@@ -825,6 +838,13 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             private = st.data_editor(_private_frame(pension.get("private_pension_plans", [])), num_rows="dynamic",
                                      width="stretch", key=f"priv_{name}",
                                      column_config={"start_date": st.column_config.DateColumn("start_date")})
+            pension_start = st.date_input(
+                "Pension start", _as_date(pension.get("retirement_date", sim["retirement_date"])),
+                max_value=date(2150, 1, 1), help="first payout month of the public, private and Rürup pensions")
+            contrib_end = st.date_input(
+                "Contributions end", _as_date(pension.get("contributions_end_date", retirement)),
+                max_value=date(2150, 1, 1), help="last month of contributions to all pension contracts (exclusive); "
+                                                 "before the pension start for an early retirement")
             public = _money_input(st, "Public pension, gross [€/month]", float(sum(p["monthly_payout_brutto"] for p in pension.get("public_pension_plan", []))))
             st.caption("Basisrente (Rürup): contributions until retirement (tax deductible), lifelong pension "
                        "= capital / 10 000 × pension factor, taxed with the Besteuerungsanteil. fund_linked: the "
@@ -960,7 +980,14 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
         lifecycle["insurances"] = [{"name": r["name"], "amount": float(r["amount"]), "frequency": r["frequency"]}
                                    for r in insurances.to_dict("records") if r.get("name")]
         new["lifecycle"] = lifecycle
-        new["total_pension"] = {"retirement_date": retirement,
+        lifecycle["other_expenses"] = [
+            {"name": r["name"], "monthly_amount": float(r["monthly_amount"]),
+             **({"start_date": _as_date(r["start_date"])} if r.get("start_date") not in (None, "") and
+                r["start_date"] == r["start_date"] else {}),
+             **({"end_date": _as_date(r["end_date"])} if r.get("end_date") not in (None, "") and
+                r["end_date"] == r["end_date"] else {})}
+            for r in other.to_dict("records") if r.get("name") and r.get("monthly_amount") == r.get("monthly_amount")]
+        new["total_pension"] = {"retirement_date": pension_start, "contributions_end_date": min(contrib_end, pension_start),
                                 "private_pension_plans": _private_plans(private, start),
                                 "public_pension_plan": [{"monthly_payout_brutto": public}] if public > 0 else [],
                                 "ruerup_plans": _ruerup_plans(ruerup, start)}
@@ -984,7 +1011,9 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
         new["utility_function"] = {"gamma": gamma, "epsilon": epsilon}
         try:
             if end <= start or not start <= retirement:
-                raise ValueError("need start < end and start <= retirement")
+                raise ValueError("need start < end and start <= end of working life")
+            if pension_start < retirement:
+                raise ValueError("the pension start must not be before the end of working life")
             LSMCConfigMapper.map_yaml_to_params(copy.deepcopy(new))
             save_config(new_name.strip(), new, PARAMS_DIR)
             if not is_new and new_name.strip() != name:

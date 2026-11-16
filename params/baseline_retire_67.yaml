@@ -1,0 +1,185 @@
+# ----------------------------
+# Simulation parameters for lifecycle financial planning
+# ----------------------------
+simulation_parameters:
+  run_config_id: "baseline_retire_67"
+  initial_wealth: 145000.0
+  initial_equity: 0.0            # part of initial_wealth currently held in equity (rest: savings)
+  start_date: 2026-01-01
+  end_date: 2081-01-01
+  retirement_date: 2055-07-01
+  current_age: 37.5              # age at start_date (drives the Gompertz mortality)
+  yearly_return_savings: 0.02    # risk-free savings account
+  beta: 0.999                    # monthly discount factor
+
+# ----------------------------
+# Lifecycle cashflows
+# ----------------------------
+lifecycle:
+  # Regular cashflows
+  salary:
+    mode: gross                # gross: yearly gross amounts, net via the payroll section; net: monthly_net + bonus_net
+    yearly_fixed: 120000       # fixed gross salary per year, paid in 12 monthly amounts
+    yearly_bonus: 32500        # yearly gross bonus (deterministic)
+    bonus_month: 4             # month of the bonus payment (1-12)
+    retirement_date: 2055-07-01
+
+  rent:
+    monthly_amount: 1100
+
+  electricity:
+    monthly_amount: 16
+
+  telecommunication:
+    monthly_amount: 80
+
+  groceries:
+    monthly_amount: 600
+
+  # Insurances
+  insurances:
+    - name: "Private Liability"
+      amount: 50
+      frequency: "Y"
+    - name: "Dental Supplemental"
+      amount: 40
+      frequency: "M"
+    - name: "Private accident"
+      amount: 160
+      frequency: "Y"
+    - name: "Household Contents"
+      amount: 90
+      frequency: "Y"
+    - name: "Disability"
+      amount: 56
+      frequency: "M"
+
+# ----------------------------
+# Total pension (aggregated & taxed together)
+# ----------------------------
+total_pension:
+  retirement_date: 2055-07-01
+
+  private_pension_plans:
+    - name: "Company Pension Plan Uniper"
+      monthly_contribution: 0
+      monthly_payout_brutto: 30
+      taxable_earnings_share: 1.0
+
+    - name: "Private Pension Plan RuV"
+      monthly_contribution: 60
+      monthly_payout_brutto: 102
+      taxable_earnings_share: 0.18
+
+    - name: "Private Life Insurance RuV"
+      monthly_contribution: 137
+      monthly_payout_brutto: 190
+      taxable_earnings_share: 0.18
+
+    - name: "Private Pension Plan HUK"
+      initial_monthly_contribution: 114
+      monthly_payout_brutto: 334
+      taxable_earnings_share: 0.18
+      contribution_growth_rate: 0.05
+      start_date: 2026-01-01
+
+  public_pension_plan:
+    - monthly_payout_brutto: 3100   # in euros of start_date (Renteninformation), indexed with public_pension_indexation
+
+  # Basisrente (Rürup): contributions until retirement, lifelong pension afterwards
+  ruerup_plans:
+    - name: "Rürup"
+      monthly_contribution: 600     # constant contribution (€/month)
+      contribution_growth: 0.0      # yearly increase (Dynamik)
+      start_date: 2026-01-01
+      fund_linked: true             # capital follows the simulated ETF paths (false: expected_return below)
+      expected_return: 0.06         # only with fund_linked: false
+      running_costs: 0.012          # fund TER + contract costs p.a.
+      acquisition_costs: 0.04       # share of every contribution for acquisition / distribution
+      pension_factor: 28.0          # Rentenfaktor: €/month per 10 000 € capital
+      initial_capital: 0.0
+
+# ----------------------------
+# Inflation (all amounts above are in euros of start_date; results are in real euros)
+# ----------------------------
+inflation:
+  rate: 0.02                       # yearly inflation
+  salary_real_growth: 0.0          # salary growth on top of inflation
+  expenses_indexed: true           # rent, living costs, insurances grow with inflation
+  public_pension_indexation: 0.02  # yearly Rentenanpassung of the public pension (from start_date)
+  tax_brackets_indexed: true       # tariff brackets, allowances, Basisvorsorge room grow with inflation
+
+# ----------------------------
+# Emergency reserve
+# ----------------------------
+reserve:
+  enabled: true
+  months_of_fixed_costs: 6         # kept in the savings account (not invested in equity)
+
+# ----------------------------
+# Payroll: gross -> net of the salary (employee shares, values 2025; ceilings grow with inflation)
+# ----------------------------
+payroll:
+  pension_rate: 0.093                    # public pension, employee share
+  unemployment_rate: 0.013               # unemployment insurance, employee share
+  pension_ceiling: 96600                 # Beitragsbemessungsgrenze RV/AV per year
+  health_insurance: statutory            # statutory or private
+  health_rate: 0.0855                    # statutory: 7.3 % + half of the Zusatzbeitrag
+  care_rate: 0.018                       # Pflegeversicherung employee share (childless: 0.024)
+  health_ceiling: 66150                  # Beitragsbemessungsgrenze KV/PV per year
+  private_premium_monthly: 0             # private: premium health + care per month
+  private_employer_subsidy_monthly: 0    # private: employer subsidy per month
+  church_tax_rate: 0.0                   # 0, 0.08 (BY, BW) or 0.09
+  werbungskosten: 1230                   # per year
+  basis_pension_max: 29344               # Höchstbetrag Basisvorsorge (Rürup room = this - 2 x RV contributions)
+
+# ----------------------------
+# Taxes
+# ----------------------------
+tax:
+  capital_gains_tax_rate: 0.26375     # Abgeltungsteuer 25 % + Soli 5.5 % (add church tax if any)
+  equity_partial_exemption: 0.30      # Teilfreistellung equity ETFs
+  tax_savings_interest: true
+  tax_equity_returns: true
+  income_tax_mode: tariff             # tariff (§32a EStG 2025 + Soli) or flat
+  income_tax_rate_retirement: 0.20    # used with income_tax_mode: flat
+  marginal_tax_rate_working: 0.42     # Rürup refund rate if the salary is given net (gross: exact from payroll)
+  basis_pension_deduction_room: 11000 # Rürup deduction room if the salary is given net (gross: from payroll)
+  pension_allowance_yearly: 102       # Werbungskosten-Pauschbetrag
+
+# ----------------------------
+# Stochastic model (LSMC)
+# ----------------------------
+stochastic:
+  yearly_return: 0.07      # expected yearly equity return
+  sigma: 0.18              # yearly equity volatility
+  n_sims: 2000             # regression paths (backward induction)
+  n_sims_oos: 10000        # out-of-sample paths (forward simulation)
+  seed: 2906
+
+  survival_model:
+    table: destatis_unisex   # destatis_unisex / destatis_male / destatis_female (period table 2021/23) or custom
+    age_shift: -3            # years; -3 ≈ cohort adjustment (mortality of a 3 years younger person)
+    b: 9.5e-5                # Gompertz hazard b * exp(c * age), used with table: custom
+    c: 0.085
+    seed: 123
+
+# ----------------------------
+# Technical solver parameters
+# ----------------------------
+technical:
+  w_max: 3000000.0         # upper end of the wealth grid (linear extrapolation beyond)
+  n_wealth: 200            # wealth grid points, denser at low wealth
+  n_equity_shares: 11      # equity share grid 0 %, 10 %, ..., max_equity_share
+  max_equity_share: 1.0
+  regression_degree: 0     # LSMC degree in the log of the state (Rürup capital / pension); > 0 makes the equity share noisy, see README
+  shortfall_penalty: 1.0   # utility per euro of fixed expenses that cannot be paid
+  apply_terminal_penalty: false
+  use_cache: true
+
+# ----------------------------
+# Utility function (CRRA)
+# ----------------------------
+utility_function:
+  gamma: 2.0
+  epsilon: 1.0

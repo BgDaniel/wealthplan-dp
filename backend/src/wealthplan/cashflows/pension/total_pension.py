@@ -34,9 +34,12 @@ class TotalPension(CashflowBase):
 
     def __init__(self, pensions: List[PensionPlan], retirement_date: dt.date, tax: Optional[TaxModel] = None,
                  tax_scale: Optional[Callable[[dt.date], float]] = None,
-                 refund: Optional[Callable[[dt.date, float], float]] = None):
+                 refund: Optional[Callable[[dt.date, float], float]] = None,
+                 contributions_end: Optional[dt.date] = None):
         self.pensions = pensions
         self.retirement_date: dt.date = retirement_date
+        # contributions stop here (early retirement: before the pension start); default: retirement
+        self.contributions_end: dt.date = min(contributions_end or retirement_date, retirement_date)
         self.tax = tax or TaxModel()
         # indexation of the tariff brackets / allowances (inflation), 1 if not indexed
         self.tax_scale: Callable[[dt.date], float] = tax_scale or (lambda d: 1.0)
@@ -62,6 +65,8 @@ class TotalPension(CashflowBase):
         """
         out: Dict[str, float] = {}
         if delivery_date < self.retirement_date:
+            if delivery_date >= self.contributions_end:
+                return out  # gap between the end of the contributions and the pension start
             ruerup = 0.0
             for p in self.pensions:
                 c = p.monthly_contribution(delivery_date)

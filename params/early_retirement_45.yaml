@@ -1,13 +1,15 @@
 # ----------------------------
-# Simulation parameters for lifecycle financial planning
+# Early retirement at 45 (July 2033): salary and all pension contributions stop, the public
+# pension and the Rürup / private pensions start at 67 (July 2055). In between: living from
+# the portfolio, voluntary health / care insurance as an extra fixed cost.
 # ----------------------------
 simulation_parameters:
-  run_config_id: "lifecycle"
+  run_config_id: "early_retirement_45"
   initial_wealth: 145000.0
   initial_equity: 0.0            # part of initial_wealth currently held in equity (rest: savings)
   start_date: 2026-01-01
   end_date: 2081-01-01
-  retirement_date: 2055-07-01
+  retirement_date: 2033-07-01    # end of the working life (age 45)
   current_age: 37.5              # age at start_date (drives the Gompertz mortality)
   yearly_return_savings: 0.02    # risk-free savings account
   beta: 0.999                    # monthly discount factor
@@ -22,7 +24,7 @@ lifecycle:
     yearly_fixed: 120000       # fixed gross salary per year, paid in 12 monthly amounts
     yearly_bonus: 32500        # yearly gross bonus (deterministic)
     bonus_month: 4             # month of the bonus payment (1-12)
-    retirement_date: 2055-07-01
+    retirement_date: 2033-07-01  # last salary in June 2033
 
   rent:
     monthly_amount: 1100
@@ -36,7 +38,15 @@ lifecycle:
   groceries:
     monthly_amount: 600
 
-  # Insurances
+  # Voluntary statutory health + care insurance without employment (age 45 to 67).
+  # ESTIMATE: minimum contribution ~230 EUR/month, more with capital income - please check.
+  other_expenses:
+    - name: "Health + care insurance (voluntary)"
+      monthly_amount: 450
+      start_date: 2033-07-01
+      end_date: 2055-07-01
+
+  # Insurances (disability insurance dropped: no earned income to insure after 45)
   insurances:
     - name: "Private Liability"
       amount: 50
@@ -50,15 +60,13 @@ lifecycle:
     - name: "Household Contents"
       amount: 90
       frequency: "Y"
-    - name: "Disability"
-      amount: 56
-      frequency: "M"
 
 # ----------------------------
 # Total pension (aggregated & taxed together)
 # ----------------------------
 total_pension:
-  retirement_date: 2055-07-01
+  retirement_date: 2055-07-01        # pensions start at 67
+  contributions_end_date: 2033-07-01 # contributions to all pension contracts stop at 45
 
   private_pension_plans:
     - name: "Company Pension Plan Uniper"
@@ -84,7 +92,9 @@ total_pension:
       start_date: 2026-01-01
 
   public_pension_plan:
-    - monthly_payout_brutto: 3100   # in euros of start_date (Renteninformation), indexed with public_pension_indexation
+    # ESTIMATE: entitlement without further contributions after 45 (3100 x 20/42 working years);
+    # the Renteninformation states it as "Rente aus den bisher gezahlten Beiträgen" - please replace.
+    - monthly_payout_brutto: 1500   # in euros of start_date, indexed with public_pension_indexation
 
   # Basisrente (Rürup): contributions until retirement, lifelong pension afterwards
   ruerup_plans:

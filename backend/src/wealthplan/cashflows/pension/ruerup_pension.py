@@ -1,5 +1,6 @@
 import datetime as dt
 from dataclasses import dataclass, field
+from typing import Optional
 
 from wealthplan.cashflows.pension.pension_plan import PensionPlan
 
@@ -47,6 +48,9 @@ class RuerupPension(PensionPlan):
         Capital already saved at ``start_date``.
     fund_linked : bool
         Capital follows the simulated equity paths (True) or the deterministic expected return.
+    contribution_end : dt.date, optional
+        Last contribution month (exclusive), e.g. an early retirement before the pension start;
+        default: the pension start.
     """
 
     name: str
@@ -60,6 +64,7 @@ class RuerupPension(PensionPlan):
     pension_factor: float = 28.0
     initial_capital: float = 0.0
     fund_linked: bool = True
+    contribution_end: Optional[dt.date] = None
     monthly_payout_brutto: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -70,7 +75,8 @@ class RuerupPension(PensionPlan):
         self.monthly_payout_brutto = self.capital_at_pension_start() / 10_000.0 * self.pension_factor
 
     def monthly_contribution(self, date: dt.date) -> float:
-        if date < self.start_date or date >= self.pension_start:
+        end = min(self.contribution_end, self.pension_start) if self.contribution_end else self.pension_start
+        if date < self.start_date or date >= end:
             return 0.0
         years = date.year - self.start_date.year
         return self.monthly_contribution_amount * (1.0 + self.contribution_growth) ** years
