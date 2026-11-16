@@ -72,6 +72,34 @@ FIGURE_TITLES = {
     "12_ruerup": "Rürup contract",
 }
 
+FIGURE_HELP = {
+    "01_wealth": "Liquid wealth (ETF + savings account) at the start of each month over the simulated paths "
+                 "alive at that age: median line, 25–75 % and 5–95 % bands. Euros of the start year.",
+    "02_consumption": "Optimal monthly consumption on top of the fixed costs. Dashed: net cashflow (net income − "
+                      "fixed costs) as monthly average of the year (bonus spread over the year). Consumption below "
+                      "the line means saving, above it means living from the holdings.",
+    "03_equity_share": "Share of the invested wealth held in equity (ETF) after the monthly decision; the rest is "
+                       "in the savings account (at least the emergency reserve).",
+    "04_holdings": "Amount in equity and in the savings account after rebalancing (median and 25–75 %).",
+    "05_flows": "Money moved into (+) or out of (−) each asset per month, averaged over each year: new savings "
+                "while working, withdrawals in retirement. The initial reallocation of the start wealth is left "
+                "out.",
+    "06_saving": "Net cashflow − consumption, monthly average of each year: positive = saving, negative = "
+                 "withdrawal from the holdings.",
+    "07_equity_policy": "Optimal equity share as a function of age and invested wealth (median Rürup state). "
+                        "Dashed: median invested wealth of the simulation.",
+    "08_survival": "Probability to be alive at each age (Gompertz fit of the Destatis life table; simulated "
+                   "share dotted).",
+    "09_regression": "Quality of the LSMC regression of the continuation value on the regression state "
+                     "(Rürup capital / pension); median R² over the wealth grid per month.",
+    "10_depletion": "Among the paths alive: share with wealth below 6 months of fixed costs and share where the "
+                    "fixed costs cannot be paid. Rises towards the plan end because the plan consumes the rest.",
+    "11_taxes": "Taxes per year: capital gains tax on interest and ETF returns (median and 25–75 %), income tax "
+                "on pensions (incl. the Rürup part), Rürup tax refund as negative tax.",
+    "12_ruerup": "Rürup contract capital on the simulated ETF paths until the pension start (median and bands) "
+                 "and the resulting net Rürup pension.",
+}
+
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
 CSS = """
 <style>
@@ -99,6 +127,26 @@ def _header(kicker: str, title: str, subtitle: str) -> None:
     st.markdown(f'<div class="page-kicker">{kicker}</div>', unsafe_allow_html=True)
     st.title(title)
     st.markdown(f'<div class="page-subtitle">{subtitle}</div>', unsafe_allow_html=True)
+
+
+def _money_input(container: Any, label: str, value: float, help: str | None = None) -> float:
+    """Euro amount input with thousands separators ("144,400"); accepts input with or without commas."""
+    value = float(value)
+    text = container.text_input(label, value=f"{value:,.0f}" if value.is_integer() else f"{value:,.2f}", help=help)
+    try:
+        return float(text.replace(",", "").replace(" ", "").replace("€", "") or 0.0)
+    except ValueError:
+        container.error(f"{label}: '{text}' is not a number")
+        return float(value)
+
+
+def _fmt_table(frame: pd.DataFrame, decimals: int = 0) -> pd.DataFrame:
+    """Numbers as strings with comma thousands separators (for display tables)."""
+    out = frame.copy()
+    for col in out.columns:
+        if pd.api.types.is_numeric_dtype(out[col]) and not pd.api.types.is_bool_dtype(out[col]):
+            out[col] = out[col].map(lambda v: "" if pd.isna(v) else f"{v:,.{decimals}f}")
+    return out
 
 
 def _fmt_duration(seconds: float | None) -> str:
@@ -376,11 +424,14 @@ def result_page() -> None:
         tabs = st.tabs([FIGURE_TITLES.get(f.stem, f.stem) for f in figures])
         for tab, fig in zip(tabs, figures):
             tab.image(str(fig), width="stretch")
+            if fig.stem in FIGURE_HELP:
+                tab.caption(FIGURE_HELP[fig.stem])
 
     left, right = st.columns([1.2, 1], gap="large")
     with left:
         st.subheader("Key figures")
-        rows = [(k, v) for k, v in summary.items() if not k.startswith("runtime_")]
+        rows = [(k, f"{v:,.4f}" if isinstance(v, float) and abs(v) < 10 else f"{v:,.0f}" if isinstance(v, (int, float))
+                 and not isinstance(v, bool) else v) for k, v in summary.items() if not k.startswith("runtime_")]
         st.dataframe(pd.DataFrame(rows, columns=["Quantity", "Value"]).astype({"Value": str}),
                      hide_index=True, width="stretch", height=420)
     with right:
@@ -443,6 +494,37 @@ def _allocation_figure(current: tuple[float, float], target: tuple[float, float]
     return fig
 
 
+STEERING_HELP = """
+* **Net income** – what arrives on your account this month: salary (in the bonus month plus the
+  bonus) or pensions, after income tax and social security, plus tax refunds (Rürup).
+* **Fixed costs** – rent, groceries, electricity, telecommunication, insurances and the
+  contributions to your pension contracts (incl. Rürup).
+* **Net cashflow** – net income minus fixed costs: the money left before consumption.
+* **Consumption allowed** – the optimal amount you may spend on top of the fixed costs.
+  Net cashflow − consumption is invested (positive) or withdrawn from your holdings (negative).
+* **Actions** – how much to buy / sell of equity and savings account so that after this month
+  the optimal equity share and the emergency reserve are met.
+* All amounts are nominal euros of the chosen month; the line below the figures converts them to
+  the purchasing power of the start year.
+"""
+
+
+def _income_and_fixed(items: pd.Series, cats: dict[str, str]) -> tuple[float, float]:
+    """Net income (salary / pensions after tax and social security, refunds) and fixed costs."""
+    income_cats = ("Salary", "Pensions (gross)", "Tax refund", "Social security", "Income tax")
+    if cats:
+        income = float(sum(v for k, v in items.items() if cats.get(k) in income_cats))
+        fixed = float(-sum(v for k, v in items.items() if cats.get(k) not in income_cats))
+    else:
+        income = float(items[items > 0].sum())
+        fixed = float(-items[items < 0].sum())
+    return income, fixed
+
+
+def _signed(value: float) -> str:
+    return f"{value:+,.0f} €"
+
+
 def steering_page() -> None:
     """What to do this month: cashflows, allowed consumption, buy / sell per asset."""
     done = [j for j in list_jobs(JOBS_ROOT) if j["state"] == "done"
@@ -458,10 +540,13 @@ def steering_page() -> None:
         policy = {k: f[k] for k in f.files}
     months = [date.fromisoformat(str(m)) for m in policy["months"]]
     this_month = date.today().replace(day=1)
-    default = months.index(this_month) if this_month in months else 0
+    # default: the coming month, compared with the current one
+    current = months.index(this_month) if this_month in months else None
+    default = min(current + 1, len(months) - 1) if current is not None else 0
     month = c_month.selectbox("Month", months, index=default, format_func=lambda d: d.strftime("%m/%Y"))
     t = months.index(month)
-    items = pd.read_csv(run_dir / "cashflows.csv", index_col=0).iloc[t]
+    all_items = pd.read_csv(run_dir / "cashflows.csv", index_col=0)
+    items = all_items.iloc[t]
     quant = pd.read_csv(run_dir / "quantiles.csv", index_col=0).iloc[t]
     params = yaml.safe_load((run_dir / "params.yaml").read_text(encoding="utf-8"))
 
@@ -481,10 +566,8 @@ def steering_page() -> None:
     with st.container(border=True):
         st.subheader("Your holdings at the start of the month")
         c1, c2, c3 = st.columns(3)
-        eq_now = c1.number_input("Equity (ETFs) [€]", value=round(max(eq_default, 0.0), -2), min_value=0.0,
-                                 step=1000.0)
-        sav_now = c2.number_input("Savings account [€]", value=round(max(sav_default, 0.0), -2), min_value=0.0,
-                                  step=1000.0)
+        eq_now = _money_input(c1, "Equity (ETFs) [€]", round(max(eq_default, 0.0), -2))
+        sav_now = _money_input(c2, "Savings account [€]", round(max(sav_default, 0.0), -2))
         c3.markdown(f'<div class="facts">Defaults: {"configuration" if t == 0 else "median of the simulated paths"}'
                     f'<br>Total <b>{_eur(eq_now + sav_now)}</b></div>', unsafe_allow_html=True)
         # fund-linked Rürup: its contract value (before) / pension (after the start) is a state of
@@ -494,13 +577,11 @@ def steering_page() -> None:
             r_idx = int(policy["ruerup_index"])
             if t < r_idx:
                 cap_default = price * float(quant.get("ruerup_capital_p50", 0.0) or 0.0)
-                cap = c1.number_input("Rürup contract value [€]", value=round(max(cap_default, 0.0), -2),
-                                      min_value=0.0, step=1000.0, help="from your Rürup statement (Vertragsguthaben)")
+                cap = _money_input(c1, "Rürup contract value [€]", round(max(cap_default, 0.0), -2), help="from your Rürup statement (Vertragsguthaben)")
                 state = cap / price + 1.0
             else:
                 gross_default = price * float(quant.get("ruerup_gross_pension_p50", 0.0) or 0.0)
-                gross = c1.number_input("Rürup pension, gross [€/month]", value=float(round(max(gross_default, 0.0))),
-                                        min_value=0.0, step=10.0)
+                gross = _money_input(c1, "Rürup pension, gross [€/month]", float(round(max(gross_default, 0.0))))
                 tp = next(cf for cf in LSMCConfigMapper.map_yaml_to_params(copy.deepcopy(params))["cashflows"]
                           if hasattr(cf, "stochastic_plans"))
                 extra_nominal = float(tp.stochastic_net_payout(month, np.array([gross]))[0])
@@ -516,22 +597,39 @@ def steering_page() -> None:
     reserve = price * float(policy["reserve"][t]) if "reserve" in policy else 0.0
     cat_file = run_dir / "cashflow_categories.json"
     cats = json.loads(cat_file.read_text()) if cat_file.exists() else {}
-    income_cats = ("Salary", "Pensions (gross)", "Tax refund", "Social security", "Income tax")
     cats["Rürup pension (net, simulated)"] = "Pensions (gross)"
-    if cats:
-        income = float(sum(v for k, v in items.items() if cats.get(k) in income_cats))
-        fixed = float(-sum(v for k, v in items.items() if cats.get(k) not in income_cats))
-    else:
-        income = float(items[items > 0].sum())
-        fixed = float(-items[items < 0].sum())
+    income, fixed = _income_and_fixed(items, cats)
+
+    # comparison with the current month (same holdings and Rürup state)
+    ref = current if current is not None and current != t else None
+    deltas: dict[str, str | None] = {"income": None, "fixed": None, "net": None, "consumption": None}
+    if ref is not None:
+        ref_items = all_items.iloc[ref].copy()
+        r_idx = int(policy["ruerup_index"]) if bool(policy.get("has_ruerup", False)) else len(months)
+        same_phase = (ref < r_idx) == (t < r_idx)
+        ref_extra = extra_nominal if same_phase and t >= r_idx else 0.0
+        if ref_extra:
+            ref_items["Rürup pension (net, simulated)"] = ref_extra
+        ref_income, ref_fixed = _income_and_fixed(ref_items, cats)
+        ref_price = float(policy["price_index"][ref]) if "price_index" in policy else 1.0
+        ref_d = decide(policy, ref, (eq_now + sav_now) / ref_price, state if same_phase else 1.0,
+                       ref_extra / ref_price)
+        deltas = {"income": _signed(income - ref_income), "fixed": _signed(fixed - ref_fixed),
+                  "net": _signed(d["net_cashflow"] - ref_d["net_cashflow"] * ref_price),
+                  "consumption": _signed(d["consumption"] - ref_d["consumption"] * ref_price) if same_phase else None}
 
     m = st.columns(4)
-    m[0].metric("Net income", _eur(income),
+    m[0].metric("Net income", _eur(income), deltas["income"],
                 help="salary / bonus / pensions after income tax and social security, plus tax refunds")
-    m[1].metric("Fixed costs", _eur(fixed), help="rent, living costs, insurances, pension contributions")
-    m[2].metric("Net cashflow", _eur(d["net_cashflow"]), help="income − fixed costs")
-    m[3].metric("Consumption allowed", _eur(d["consumption"]),
+    m[1].metric("Fixed costs", _eur(fixed), deltas["fixed"], delta_color="inverse",
+                help="rent, living costs, insurances, pension contributions")
+    m[2].metric("Net cashflow", _eur(d["net_cashflow"]), deltas["net"], help="net income − fixed costs")
+    m[3].metric("Consumption allowed", _eur(d["consumption"]), deltas["consumption"],
                 help="optimal discretionary consumption on top of the fixed costs")
+    if ref is not None:
+        st.caption(f"Changes compared with {months[ref]:%B %Y} (current month), same holdings.")
+    with st.expander("What do these numbers mean?", expanded=False):
+        st.markdown(STEERING_HELP)
     if price > 1.0005:
         start_year = months[0].year
         st.markdown(f'<div class="facts">In purchasing power of {start_year} (÷ price index <b>{price:.2f}</b>): '
@@ -559,8 +657,7 @@ def steering_page() -> None:
         st.subheader("Cashflows of the month")
         table = pd.DataFrame({"Item": items.index, "Amount [€]": items.values})
         table = table[table["Amount [€]"].abs() > 0.005].sort_values("Amount [€]", ascending=False)
-        st.dataframe(table, hide_index=True, width="stretch", height=min(38 + 35 * len(table), 640),
-                     column_config={"Amount [€]": st.column_config.NumberColumn(format="%.2f")})
+        st.dataframe(_fmt_table(table, 2), hide_index=True, width="stretch", height=min(38 + 35 * len(table), 640))
 
 
 # ------------------------------------------------------------------ page: configurations
@@ -664,15 +761,12 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             retirement = c3.date_input("Retirement", _as_date(sim["retirement_date"]), max_value=date(2150, 1, 1))
             age = c4.number_input("Age at start", value=float(sim.get("current_age", 40.0)), min_value=0.0,
                                   max_value=110.0, step=0.5)
-            wealth0 = c1.number_input("Initial wealth [€]", value=float(sim["initial_wealth"]), min_value=0.0,
-                                      step=5000.0)
+            wealth0 = _money_input(c1, "Initial wealth [€]", float(sim["initial_wealth"]))
             savings = c2.number_input("Savings rate [%/yr]", value=100 * float(sim["yearly_return_savings"]),
                                       step=0.25, format="%.2f")
             beta = c3.number_input("Monthly discount factor β", value=float(sim["beta"]), min_value=0.9,
                                    max_value=1.0, step=0.0005, format="%.4f")
-            equity0 = c4.number_input("thereof in equity [€]", value=float(sim.get("initial_equity", 0.0)),
-                                      min_value=0.0, step=5000.0,
-                                      help="part of the initial wealth currently held in equity; rest: savings")
+            equity0 = _money_input(c4, "thereof in equity [€]", float(sim.get("initial_equity", 0.0)), help="part of the initial wealth currently held in equity; rest: savings")
 
         sal = life.get("salary") or {}
         sal_mode = sal.get("mode", "gross" if "yearly_fixed" in sal else "net")
@@ -684,15 +778,10 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             months = list(range(1, 13))
             bonus_month = c2.selectbox("Bonus paid in", months, index=int(sal.get("bonus_month", 4)) - 1,
                                        format_func=lambda m: date(2000, m, 1).strftime("%B"))
-            fixed_gross = c3.number_input("Fixed gross salary [€/year]", value=float(sal.get("yearly_fixed", 0.0)),
-                                          min_value=0.0, step=1000.0, help="paid in 12 monthly amounts (mode gross)")
-            bonus_gross = c4.number_input("Bonus gross [€/year]", value=float(sal.get("yearly_bonus", 0.0)),
-                                          min_value=0.0, step=500.0, help="deterministic (mode gross)")
-            net_month = c3.number_input("Net salary [€/month]", value=float(sal.get("monthly_net",
-                                                                                     sal.get("monthly_amount", 0.0))),
-                                        min_value=0.0, step=100.0, help="mode net")
-            net_bonus = c4.number_input("Net bonus [€/year]", value=float(sal.get("bonus_net", 0.0)), min_value=0.0,
-                                        step=500.0, help="mode net")
+            fixed_gross = _money_input(c3, "Fixed gross salary [€/year]", float(sal.get("yearly_fixed", 0.0)), help="paid in 12 monthly amounts (mode gross)")
+            bonus_gross = _money_input(c4, "Bonus gross [€/year]", float(sal.get("yearly_bonus", 0.0)), help="deterministic (mode gross)")
+            net_month = _money_input(c3, "Net salary [€/month]", float(sal.get("monthly_net", sal.get("monthly_amount", 0.0))), help="mode net")
+            net_bonus = _money_input(c4, "Net bonus [€/year]", float(sal.get("bonus_net", 0.0)), help="mode net")
             st.caption("Payroll (mode gross): employee contributions up to the ceilings, income tax §32a 2025 + "
                        "Soli + church tax on gross − Werbungskosten − Vorsorgeaufwendungen. Values 2025; ceilings "
                        "and allowances grow with inflation if tax brackets are indexed.")
@@ -707,30 +796,22 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                   index=[0.0, 0.08, 0.09].index(float(pay["church_tax_rate"]))
                                   if float(pay["church_tax_rate"]) in (0.0, 0.08, 0.09) else 0,
                                   format_func=lambda v: "none" if v == 0 else f"{100 * v:.0f} %")
-            premium = c1.number_input("Private premium [€/month]", value=float(pay["private_premium_monthly"]),
-                                      min_value=0.0, step=10.0)
-            subsidy = c2.number_input("Employer subsidy [€/month]",
-                                      value=float(pay["private_employer_subsidy_monthly"]), min_value=0.0, step=10.0)
+            premium = _money_input(c1, "Private premium [€/month]", float(pay["private_premium_monthly"]))
+            subsidy = _money_input(c2, "Employer subsidy [€/month]", float(pay["private_employer_subsidy_monthly"]))
             pension_rate = c3.number_input("Pension + unemployment rate [%]",
                                            value=100 * (float(pay["pension_rate"]) + float(pay["unemployment_rate"])),
                                            step=0.1, format="%.2f", help="9.3 % + 1.3 %")
-            werbung = c4.number_input("Werbungskosten [€/year]", value=float(pay["werbungskosten"]), min_value=0.0,
-                                      step=10.0)
-            ceil_rv = c1.number_input("Ceiling RV/AV [€/year]", value=float(pay["pension_ceiling"]), step=600.0)
-            ceil_kv = c2.number_input("Ceiling KV/PV [€/year]", value=float(pay["health_ceiling"]), step=450.0)
-            basis_max = c3.number_input("Höchstbetrag Basisvorsorge [€/year]", value=float(pay["basis_pension_max"]),
-                                        step=100.0)
+            werbung = _money_input(c4, "Werbungskosten [€/year]", float(pay["werbungskosten"]))
+            ceil_rv = _money_input(c1, "Ceiling RV/AV [€/year]", float(pay["pension_ceiling"]))
+            ceil_kv = _money_input(c2, "Ceiling KV/PV [€/year]", float(pay["health_ceiling"]))
+            basis_max = _money_input(c3, "Höchstbetrag Basisvorsorge [€/year]", float(pay["basis_pension_max"]))
 
         with tab_cf:
             c1, c2, c3 = st.columns(3)
-            rent = c2.number_input("Rent [€/month]", value=float(life.get("rent", {}).get("monthly_amount", 0.0)),
-                                   min_value=0.0, step=50.0)
-            groceries = c3.number_input("Groceries [€/month]", value=float(life.get("groceries", {}).get(
-                "monthly_amount", 0.0)), min_value=0.0, step=50.0)
-            electricity = c1.number_input("Electricity [€/month]", value=float(life.get("electricity", {}).get(
-                "monthly_amount", 0.0)), min_value=0.0, step=5.0)
-            telecom = c2.number_input("Telecommunication [€/month]", value=float(life.get(
-                "telecommunication", {}).get("monthly_amount", 0.0)), min_value=0.0, step=5.0)
+            rent = _money_input(c2, "Rent [€/month]", float(life.get("rent", {}).get("monthly_amount", 0.0)))
+            groceries = _money_input(c3, "Groceries [€/month]", float(life.get("groceries", {}).get( "monthly_amount", 0.0)))
+            electricity = _money_input(c1, "Electricity [€/month]", float(life.get("electricity", {}).get( "monthly_amount", 0.0)))
+            telecom = _money_input(c2, "Telecommunication [€/month]", float(life.get( "telecommunication", {}).get("monthly_amount", 0.0)))
             st.caption("Insurances (frequency M = monthly, Y = yearly in January)")
             insurances = st.data_editor(
                 pd.DataFrame(life.get("insurances", []), columns=["name", "amount", "frequency"]),
@@ -744,10 +825,7 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             private = st.data_editor(_private_frame(pension.get("private_pension_plans", [])), num_rows="dynamic",
                                      width="stretch", key=f"priv_{name}",
                                      column_config={"start_date": st.column_config.DateColumn("start_date")})
-            public = st.number_input("Public pension, gross [€/month]",
-                                     value=float(sum(p["monthly_payout_brutto"]
-                                                     for p in pension.get("public_pension_plan", []))),
-                                     min_value=0.0, step=50.0)
+            public = _money_input(st, "Public pension, gross [€/month]", float(sum(p["monthly_payout_brutto"] for p in pension.get("public_pension_plan", []))))
             st.caption("Basisrente (Rürup): contributions until retirement (tax deductible), lifelong pension "
                        "= capital / 10 000 × pension factor, taxed with the Besteuerungsanteil. fund_linked: the "
                        "capital follows the simulated ETF paths (expected_return is then unused). Rates as "
@@ -777,12 +855,8 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                        value=100 * float(tax["marginal_tax_rate_working"]), min_value=0.0,
                                        max_value=47.5, step=1.0,
                                        help="Grenzsteuersatz: Rürup contributions are deducted at this rate")
-            room = c2.number_input("Basisvorsorge deduction room [€/year]",
-                                   value=float(tax["basis_pension_deduction_room"]), min_value=0.0, step=500.0,
-                                   help="Höchstbetrag (2025: 29 344 €) minus employee + employer contributions "
-                                        "to the public pension")
-            allowance = c3.number_input("Pension allowance [€/year]", value=float(tax["pension_allowance_yearly"]),
-                                        min_value=0.0, step=10.0, help="Werbungskosten-Pauschbetrag (102 €)")
+            room = _money_input(c2, "Basisvorsorge deduction room [€/year]", float(tax["basis_pension_deduction_room"]), help="Höchstbetrag (2025: 29 344 €) minus employee + employer contributions " "to the public pension")
+            allowance = _money_input(c3, "Pension allowance [€/year]", float(tax["pension_allowance_yearly"]), help="Werbungskosten-Pauschbetrag (102 €)")
 
         with tab_infl:
             st.caption("All amounts of the configuration are in euros of the start date. The optimisation runs in "
@@ -845,7 +919,7 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                       min_value=0.0, format="%.4g")
             terminal = c4.toggle("Terminal penalty −w²", value=bool(tech["apply_terminal_penalty"]),
                                  help="off: consume everything in the last month")
-            w_max = c1.number_input("Wealth grid max [€]", value=float(tech["w_max"]), min_value=1e4, step=1e5)
+            w_max = _money_input(c1, "Wealth grid max [€]", float(tech["w_max"]))
             n_wealth = c2.number_input("Wealth grid points", value=int(tech["n_wealth"]), min_value=20,
                                        max_value=2000)
             n_shares = c3.number_input("Equity share points", value=int(tech["n_equity_shares"]), min_value=2,
@@ -942,7 +1016,7 @@ def configurations_page() -> None:
                      "Salary + bonus [€/yr]": _salary_label(d.get("lifecycle", {}).get("salary") or {}),
                      "Equity μ [%]": 100 * sto["yearly_return"], "Equity σ [%]": 100 * sto["sigma"],
                      "γ": d.get("utility_function", {}).get("gamma"), "Paths": sto["n_sims"]})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.dataframe(_fmt_table(pd.DataFrame(rows)) if rows else pd.DataFrame(), hide_index=True, width="stretch")
 
     if not names:
         st.info("No configuration in params/.")

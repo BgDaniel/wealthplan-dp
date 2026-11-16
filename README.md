@@ -72,12 +72,14 @@ share; the consumption is solved in closed form on each grid segment
 regression on fresh **out-of-sample** paths with simulated death times.
 
 **Regression degree / state.** The regression state is the fund-linked Rürup capital
-(before) or Rürup pension (after the pension start) of the path: it determines future income, so
-the policy depends on it. Without such a plan the state is the equity level, which carries no
-information for i.i.d. GBM returns (use degree 0 then: higher degrees only add noise). With the
-Rürup state, degree 2 needs enough paths: out-of-sample value −0.10187 (2 000 paths) vs.
-−0.10154 (6 000 paths) vs. −0.10153 for degree 0, i.e. the information is real (R² ≈ 0.9) but
-its value is small at a ~450 €/month pension. Default: degree 2 with 4 000 regression paths.
+(before) or Rürup pension (after the pension start) of the path; without such a plan the equity
+level. Default: degree 0 (constant basis = Monte Carlo mean), i.e. the policy does not condition
+on the Rürup state, while the Rürup pension itself is still simulated per path. Reason: degree 2
+captures the Rürup information (R² ≈ 0.9) but gives no measurable value gain (out-of-sample
+−0.10154 at 6 000 paths vs. −0.10153 for degree 0) and makes the equity share erratic, because
+the objective is very flat in the equity share and regression noise flips the choice (γ = 6:
+median share jumping between 0 % and 60 % around retirement with degree 2, a smooth glide path
+90 % → 60 % → 50 % with degree 0).
 
 **Variance reduction.** The normal draws of the regression paths are moment matched per
 month (mean 0, variance 1), so the comparison between equity shares is not distorted by
