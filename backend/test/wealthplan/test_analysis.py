@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "optimizer" / "stochast
 from test_lsmc_bellman_optimizer import small_params  # noqa: E402
 
 from config.stochastic.lsmc.lsmc_config_mapper import LSMCConfigMapper  # noqa: E402
-from wealthplan.analysis import depletion_risk, ruerup_vs_etf, yearly_taxes  # noqa: E402
+from wealthplan.analysis import depletion_risk, yearly_taxes  # noqa: E402
 from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import LSMCBellmanOptimizer  # noqa: E402
 
 
@@ -44,19 +44,22 @@ class TestAnalysis(unittest.TestCase):
             gain_nominal = after * phi - x + tax * phi
             self.assertAlmostEqual(tax * phi, gain_nominal * rate, delta=1e-6 * max(1.0, abs(tax)))
 
-    def test_ruerup_vs_etf_without_costs_and_taxes(self) -> None:
-        """No costs, no taxes, same return: both capitals at retirement are equal."""
+    def test_ruerup_contract_on_equity_paths(self) -> None:
+        """Without costs the contract capital is the contributions compounded with the equity path."""
         data = small_params()
-        data["total_pension"]["ruerup_plans"][0].update(running_costs=0.0, acquisition_costs=0.0,
-                                                        expected_return=0.07)
-        data["stochastic"]["yearly_return"] = 0.07
-        data["tax"] = {"tax_savings_interest": False, "tax_equity_returns": False, "marginal_tax_rate_working": 0.0}
-        # net salary: the Rürup refund then follows the (zero) marginal rate instead of the payroll
-        data["lifecycle"]["salary"] = {"mode": "net", "monthly_net": 6_000.0}
+        plan = data["total_pension"]["ruerup_plans"][0]
+        plan.update(running_costs=0.0, acquisition_costs=0.0, initial_capital=0.0, contribution_growth=0.0)
+        data["inflation"] = {"rate": 0.0}
         opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
-        _, info = ruerup_vs_etf(opt, etf_ter=0.0)
-        self.assertAlmostEqual(info["etf_capital_at_retirement"], info["ruerup_capital_at_retirement"],
-                               delta=1e-6 * info["ruerup_capital_at_retirement"])
+        equity = opt._equity_paths(5, 7)
+        sim = opt._ruerup_simulation(equity)
+        r = opt.ruerup_index
+        c = float(plan["monthly_contribution"])
+        expected = sum(c * equity[:, r] / equity[:, t] for t in range(r))
+        np.testing.assert_allclose(sim["capital"][r - 1] * equity[:, r] / equity[:, r - 1] + c * equity[:, r]
+                                   / equity[:, r - 1], expected, rtol=1e-10)
+        gross = expected / 10_000.0 * float(plan["pension_factor"])
+        np.testing.assert_allclose(sim["extra"][r] + sim["tax"][r], gross, rtol=1e-10)
 
     def test_categories_cover_all_items(self) -> None:
         items = self.opt.cashflow_items()

@@ -1,6 +1,8 @@
 import datetime as dt
 from typing import Callable, Dict, List, Optional
 
+import numpy as np
+
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.pension.pension_plan import PensionPlan
 from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan import PrivatePensionPlan
@@ -74,11 +76,42 @@ class TotalPension(CashflowBase):
 
         taxable = 0.0
         for p in self.pensions:
+            if self.is_stochastic(p):
+                continue  # simulated per path by the optimizer (``stochastic_net_payout``)
             gross = p.payout(delivery_date)
             out[f"{p.name} pension (gross)"] = gross
             taxable += gross * self.taxable_share(p)
         out["Income tax on pensions"] = -self.tax.pension_income_tax_monthly(taxable, self.tax_scale(delivery_date))
         return out
+
+    @staticmethod
+    def is_stochastic(plan: PensionPlan) -> bool:
+        """Fund-linked Rürup plans: their payout depends on the simulated equity path."""
+        return isinstance(plan, RuerupPension) and plan.fund_linked
+
+    @property
+    def stochastic_plans(self) -> List[RuerupPension]:
+        return [p for p in self.pensions if self.is_stochastic(p)]
+
+    def stochastic_net_payout(self, delivery_date: dt.date, gross: np.ndarray) -> np.ndarray:
+        """
+        Net payout of the fund-linked Rürup pensions per path: gross minus the additional income
+        tax they cause on top of the other (deterministic) pensions.
+
+        The incremental tax is evaluated on a grid of gross amounts and interpolated (the tariff
+        is piecewise smooth), which keeps thousands of paths cheap.
+        """
+        if delivery_date < self.retirement_date or not len(gross):
+            return np.zeros_like(gross, dtype=float)
+        scale = self.tax_scale(delivery_date)
+        share = self.tax.taxable_share_basis_pension(self.retirement_date.year)
+        others = sum(p.payout(delivery_date) * self.taxable_share(p) for p in self.pensions
+                     if not self.is_stochastic(p))
+        base = self.tax.pension_income_tax_monthly(others, scale)
+        top = max(float(np.max(gross)), 1.0)
+        nodes = np.linspace(0.0, top, 401)
+        extra = np.array([self.tax.pension_income_tax_monthly(others + share * g, scale) - base for g in nodes])
+        return gross - np.interp(gross, nodes, extra)
 
     def cashflow(self, delivery_date: dt.date) -> float:
         """Net pension cashflow of the month (see ``components``)."""

@@ -235,10 +235,10 @@ def _optimal_investment(m: float, grid: np.ndarray, h: np.ndarray, l: int, beta:
 
 
 @nb.njit(parallel=True, cache=True)
-def bellman_values(grid: np.ndarray, cont: np.ndarray, y: float, beta: float, gamma: float, epsilon: float,
+def bellman_values(grid: np.ndarray, cont: np.ndarray, y: np.ndarray, beta: float, gamma: float, epsilon: float,
                    shortfall_penalty: float) -> np.ndarray:
     """
-    V_t(w_j, s) = max_{0 <= x <= w_j + y} u(w_j + y - x) + beta * cont(x, s).
+    V_t(w_j, s) = max_{0 <= x <= w_j + y_s} u(w_j + y_s - x) + beta * cont(x, s).
 
     If w + y < 0 the fixed expenses cannot be paid: c = 0, x = 0 and each missing euro
     costs ``shortfall_penalty``.
@@ -248,8 +248,8 @@ def bellman_values(grid: np.ndarray, cont: np.ndarray, y: float, beta: float, ga
     grid : np.ndarray, shape (n_w,)
     cont : np.ndarray, shape (n_sims, n_w)
         Continuation value (already including the survival probability) per path.
-    y : float
-        Net cashflow of the month.
+    y : np.ndarray, shape (n_sims,)
+        Net cashflow of the month per path (differs by path with a fund-linked Rürup pension).
 
     Returns
     -------
@@ -261,7 +261,7 @@ def bellman_values(grid: np.ndarray, cont: np.ndarray, y: float, beta: float, ga
         h = cont[s]
         l = 0
         for j in range(n_w):
-            m = grid[j] + y
+            m = grid[j] + y[s]
             if m <= 0.0:
                 out[s, j] = crra_utility_scalar(0.0, gamma, epsilon) + beta * h[0] + shortfall_penalty * m
                 continue
@@ -322,12 +322,14 @@ def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, share
 def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds: np.ndarray, degrees: np.ndarray,
                   shares: np.ndarray, cashflows: np.ndarray, equity: np.ndarray, alive: np.ndarray, w0: float,
                   equity0: float, rf: float, equity_tax: float, savings_tax: float, beta: float, gamma: float,
-                  epsilon: float, terminal_consume: bool, deflator: float, reserve: np.ndarray):
+                  epsilon: float, terminal_consume: bool, deflator: float, reserve: np.ndarray, state: np.ndarray,
+                  extra: np.ndarray):
     """
     Simulate the optimal policy on out-of-sample paths.
 
-    At every month the regressed continuation value is evaluated at the path's market state
-    (``_decide``). Holdings are tracked per asset in real euros: the equity holding grows with
+    At every month the regressed continuation value is evaluated at the path's regression state
+    ``state[p, t]`` (``_decide``); ``extra[t, p]`` is a path-dependent cashflow added to
+    ``cashflows[t]`` (fund-linked Rürup pension, real euros). Holdings are tracked per asset in real euros: the equity holding grows with
     the nominal equity return after tax 1 + (R - 1)(1 - equity_tax), the savings holding with
     rf (nominal, after tax); both are deflated by ``deflator`` = 1 / monthly inflation factor.
 
@@ -361,7 +363,7 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
             wealth[t, p] = w
             eq_before[t, p] = eq_hold
             sav_before[t, p] = sav_hold
-            m = w + cashflows[t]
+            m = w + cashflows[t] + extra[t, p]
             if t == n_t - 1:  # last month
                 cons[t, p] = max(m, 0.0) if terminal_consume else 0.0
                 invested[t, p] = 0.0 if terminal_consume else max(m, 0.0)
@@ -374,7 +376,7 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
                 eq_hold = 0.0
                 sav_hold = 0.0
                 continue
-            z = (np.log(equity[p, t]) - means[t]) / stds[t] if stds[t] > 0.0 else 0.0
+            z = (np.log(state[p, t]) - means[t]) / stds[t] if stds[t] > 0.0 else 0.0
             for i in range(d_max):
                 phi[i] = z ** i if i <= degrees[t] else 0.0
             x, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share, reserve[t])
@@ -390,7 +392,8 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
     return wealth, cons, share, invested, eq_before, sav_before, cap_tax
 
 
-def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
+def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, state: float = 1.0,
+           extra_cashflow: float = 0.0) -> Dict[str, float]:
     """
     Optimal decision of month t for a given wealth, from a saved policy (``policy_dict``).
 
@@ -403,8 +406,12 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: f
     wealth : float
         Liquid wealth at the start of the month (equity + savings), in real euros of the start
         date (divide nominal amounts by ``policy["price_index"][t]``).
-    equity_level : float
-        Equity level S_t / S_0 (only matters for a regression degree > 0).
+    state : float
+        Regression state of the month (real euros): with a fund-linked Rürup plan its contract
+        capital + 1 before and its gross pension + 1 from retirement; otherwise the equity level
+        S_t / S_0. Only matters for a regression degree > 0.
+    extra_cashflow : float
+        Path-dependent cashflow of the month in real euros (net fund-linked Rürup pension).
 
     Returns
     -------
@@ -412,7 +419,7 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: f
         resources (wealth + net cashflow), consumption, invested, equity_share, equity, savings,
         shortfall.
     """
-    cf = float(policy["cashflows"][t])
+    cf = float(policy["cashflows"][t]) + extra_cashflow
     m = wealth + cf
     n_t = policy["cashflows"].shape[0]
     out = {"net_cashflow": cf, "resources": m, "shortfall": max(-m, 0.0)}
@@ -423,7 +430,7 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: f
     else:
         d_max = policy["coeffs"].shape[1]
         std = float(policy["state_std"][t])
-        z = (np.log(equity_level) - float(policy["state_mean"][t])) / std if std > 0 else 0.0
+        z = (np.log(state) - float(policy["state_mean"][t])) / std if std > 0 else 0.0
         phi = np.array([z ** i if i <= int(policy["state_degree"][t]) else 0.0 for i in range(d_max)])
         grid = policy["wealth_grid"]
         x, alpha = _decide(m, grid, policy["coeffs"][t], phi, policy["equity_shares"], float(policy["beta"]),
@@ -566,6 +573,9 @@ class LSMCBellmanOptimizer:
 
         self.dt = 1.0 / 12.0
         self.cf = np.array([self.monthly_cashflow(m) for m in self.months])
+        # fund-linked Rürup plans are simulated per path (``_ruerup_simulation``)
+        self.total_pension = next((cf for cf in cashflows if hasattr(cf, "stochastic_plans")), None)
+        self.ruerup_plans = self.total_pension.stochastic_plans if self.total_pension is not None else []
         self.time_grid = np.array([(m - self.months[0]).days / 365.0 for m in self.months])
         self.age_grid = self.current_age + self.time_grid
         self.p_survive = self.survival_model.conditional_survival_probabilities(self.age_grid, self.dt)
@@ -619,6 +629,9 @@ class LSMCBellmanOptimizer:
         self.opt_equity_before = pd.DataFrame()
         self.opt_savings_before = pd.DataFrame()
         self.opt_capital_tax = pd.DataFrame()
+        self.opt_extra_cashflow = pd.DataFrame()
+        self.opt_ruerup_capital = pd.DataFrame()
+        self.opt_ruerup_tax = pd.DataFrame()
         self.survival_paths = np.empty((0, 0))
         self.monthly_cashflows = pd.Series(self.cf, index=self.months)
 
@@ -665,6 +678,63 @@ class LSMCBellmanOptimizer:
         self.value_in_sample = float(self.cache.load_date(self.months[0]).get("value_in_sample", np.nan))
         return True
 
+    # ------------------------------------------------------------------ fund-linked Rürup
+
+    @property
+    def ruerup_index(self) -> int:
+        """First payout month of the fund-linked Rürup plans (n_months if none)."""
+        if not self.ruerup_plans:
+            return self.n_months
+        start = self.ruerup_plans[0].pension_start
+        return next((i for i, m in enumerate(self.months) if m >= start), self.n_months)
+
+    def _ruerup_simulation(self, equity: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        Rürup contract on the simulated equity paths.
+
+        Each contribution (minus acquisition costs) buys fund units that follow the equity path
+        S_t (no tax inside the contract) minus the running costs; at the pension start the
+        capital is converted with the pension factor into a lifelong nominal pension.
+
+        Returns
+        -------
+        dict with (real euros of the start date)
+            state : (n, T) regression state: capital + 1 before, gross pension + 1 from retirement
+            extra : (T, n) net pension (gross minus the additional income tax), 0 before
+            capital : (T, n) contract capital at the start of month t (NaN from retirement)
+            tax : (T, n) income tax caused by the Rürup pension
+        """
+        n = equity.shape[0]
+        T = self.n_months
+        out = {"state": equity, "extra": np.zeros((T, n)), "capital": np.full((T, n), np.nan),
+               "tax": np.zeros((T, n))}
+        if not self.ruerup_plans:
+            return out
+        r_idx = self.ruerup_index
+        caps = [np.full(n, p.initial_capital) for p in self.ruerup_plans]
+        gross = np.zeros(n)
+        state = np.empty((n, T))
+        for t in range(T):
+            m = self.months[t]
+            total = sum(caps)
+            if t < r_idx:
+                out["capital"][t] = total / self.price_index[t]
+                state[:, t] = total / self.price_index[t] + 1.0
+                if t + 1 < T:
+                    growth = equity[:, t + 1] / equity[:, t]
+                    for i, p in enumerate(self.ruerup_plans):
+                        cost = (1.0 - p.running_costs) ** (1.0 / 12.0)
+                        caps[i] = (caps[i] + (1.0 - p.acquisition_costs) * p.monthly_contribution(m)) * growth * cost
+                continue
+            if t == r_idx:
+                gross = sum(c / 10_000.0 * p.pension_factor for c, p in zip(caps, self.ruerup_plans))
+            net = self.total_pension.stochastic_net_payout(m, gross)
+            out["extra"][t] = net / self.price_index[t]
+            out["tax"][t] = (gross - net) / self.price_index[t]
+            state[:, t] = gross / self.price_index[t] + 1.0
+        out["state"] = state
+        return out
+
     # ------------------------------------------------------------------ solver
 
     def backward_induction(self, progress: Optional[ProgressFn] = None) -> None:
@@ -677,6 +747,8 @@ class LSMCBellmanOptimizer:
         # moment matching: the comparison of the equity shares is not distorted by the random
         # mean / variance of the monthly draws
         equity = self._equity_paths(self.n_sims, self.seed, moment_matching=True)
+        ruerup = self._ruerup_simulation(equity)
+        state, extra = ruerup["state"], ruerup["extra"]
         n_w = self.wealth_grid.size
         v_next = np.tile(self._terminal_value(), (self.n_sims, 1))  # (n_sims, n_w)
 
@@ -685,7 +757,7 @@ class LSMCBellmanOptimizer:
             # after tax, real
             r = (1.0 + (equity[:, t + 1] / equity[:, t] - 1.0) * (1.0 - self.equity_tax_rate)) / self.inflation_factor
             gross = self.equity_shares[:, None] * r[None, :] + (1.0 - self.equity_shares[:, None]) * self.rf
-            reg = WealthRegressor(equity[:, t], degree=self.regression_degree)
+            reg = WealthRegressor(state[:, t], degree=self.regression_degree)
             proj, sum_y, sum_y2 = project_realised_values(self.wealth_grid, v_next, gross, reg.q,
                                                           float(self.p_survive[t]))
             reg.fit_projection(proj.reshape(proj.shape[0], -1), sum_y.ravel(), sum_y2.ravel())
@@ -693,8 +765,8 @@ class LSMCBellmanOptimizer:
 
             cont = best_continuation(reg.q, proj, self.wealth_grid, self.equity_shares,
                                      float(self.reserve[t]))  # best admissible equity share per (path, x)
-            v_next = bellman_values(self.wealth_grid, cont, float(self.cf[t]), self.beta, self.gamma, self.epsilon,
-                                    self.shortfall_penalty)
+            v_next = bellman_values(self.wealth_grid, cont, self.cf[t] + extra[t], self.beta, self.gamma,
+                                    self.epsilon, self.shortfall_penalty)
 
             self.cache.store_date(self.months[t], {
                 "coeffs": reg.coeffs.reshape(reg.degree + 1, n_w, -1), "mean": reg.mean, "std": reg.std,
@@ -720,12 +792,18 @@ class LSMCBellmanOptimizer:
         """Forward simulation of the optimal policy on out-of-sample paths."""
         oos_seed = None if self.seed is None else self.seed + 1
         equity = self._equity_paths(self.n_sims_oos, oos_seed)
+        ruerup = self._ruerup_simulation(equity)
         self.survival_paths = self.survival_process.simulate(n_sims=self.n_sims_oos, dates=self.months)
         wealth, cons, share, invested, eq_before, sav_before, cap_tax = forward_paths(
             self.wealth_grid, self.coeffs, self.state_mean, self.state_std, self.state_degree, self.equity_shares,
             self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf_nominal,
             self.equity_tax_rate, self.savings_tax_rate, self.beta, self.gamma, self.epsilon,
-            not self.apply_terminal_penalty, 1.0 / self.inflation_factor, self.reserve)
+            not self.apply_terminal_penalty, 1.0 / self.inflation_factor, self.reserve, ruerup["state"],
+            ruerup["extra"])
+        dead = ~(self.survival_paths.T > 0)
+        self.opt_extra_cashflow = pd.DataFrame(np.where(dead, np.nan, ruerup["extra"]), index=self.months)
+        self.opt_ruerup_capital = pd.DataFrame(np.where(dead, np.nan, ruerup["capital"]), index=self.months)
+        self.opt_ruerup_tax = pd.DataFrame(np.where(dead, np.nan, ruerup["tax"]), index=self.months)
         self.opt_capital_tax = pd.DataFrame(cap_tax, index=self.months)
         self.opt_equity_before = pd.DataFrame(eq_before, index=self.months)
         self.opt_savings_before = pd.DataFrame(sav_before, index=self.months)
@@ -761,7 +839,8 @@ class LSMCBellmanOptimizer:
         alive = ~np.isnan(cons)
         disc = self.beta ** np.arange(self.n_months)[:, None]
         u = crra_utility(np.where(alive, cons, 0.0), self.gamma, self.epsilon)
-        shortfall = np.maximum(-(self.opt_wealth.values + self.cf[:, None]), 0.0)
+        shortfall = np.maximum(-(self.opt_wealth.values + self.cf[:, None]
+                                 + np.nan_to_num(self.opt_extra_cashflow.values)), 0.0)
         u = u - self.shortfall_penalty * np.where(alive, shortfall, 0.0)
         return np.sum(np.where(alive, disc * u, 0.0), axis=0)
 
@@ -772,7 +851,8 @@ class LSMCBellmanOptimizer:
         r = self.retirement_index
         wealth, cons, share = self.opt_wealth.values, self.opt_consumption.values, self.opt_equity_share.values
         u = self.realised_utility()
-        shortfall = np.nansum(np.maximum(-(wealth + self.cf[:, None]), 0.0) > 0.0, axis=0) > 0
+        extra = np.nan_to_num(self.opt_extra_cashflow.values)
+        shortfall = np.nansum(np.maximum(-(wealth + self.cf[:, None] + extra), 0.0) > 0.0, axis=0) > 0
 
         def at(data: np.ndarray, t: int, q: float = 50.0) -> float:
             if t >= data.shape[0] or not np.isfinite(data[t]).any():
@@ -803,6 +883,10 @@ class LSMCBellmanOptimizer:
                 "life_expectancy": float(self.age_grid[0] + self.survival_paths.sum(axis=1).mean() / 12.0),
                 "regression_r2_median": float(np.nanmedian(list(self.r_squared.values()))),
                 "from_cache": self.from_cache,
+                "ruerup_capital_retirement_median": at(self.opt_ruerup_capital.values, self.ruerup_index - 1)
+                if self.ruerup_plans else float("nan"),
+                "ruerup_net_pension_median": at(self.opt_extra_cashflow.values, self.ruerup_index)
+                if self.ruerup_plans else float("nan"),
             }
         out.update({f"runtime_{k}_s": v for k, v in self.runtimes.items()})
         return out
@@ -812,6 +896,8 @@ class LSMCBellmanOptimizer:
         cols: Dict[str, Any] = {"age": self.age_grid, "net_cashflow": self.cf,
                                 "alive": np.nanmean(self.survival_paths, axis=0)}
         series = {"wealth": self.opt_wealth.values, "consumption": self.opt_consumption.values,
+                  "ruerup_capital": self.opt_ruerup_capital.values, "ruerup_net_pension": self.opt_extra_cashflow.values,
+                  "ruerup_gross_pension": self.opt_extra_cashflow.values + self.opt_ruerup_tax.values,
                   "equity_share": self.opt_equity_share.values,
                   "equity_amount": self.opt_equity_share.values * self.opt_invested.values,
                   "equity_before": self.opt_equity_before.values, "savings_before": self.opt_savings_before.values}
@@ -834,11 +920,12 @@ class LSMCBellmanOptimizer:
             "state_degree": self.state_degree, "beta": np.float64(self.beta), "gamma": np.float64(self.gamma),
             "epsilon": np.float64(self.epsilon), "terminal_consume": np.bool_(not self.apply_terminal_penalty),
             "price_index": self.price_index, "reserve": self.reserve,
+            "ruerup_index": np.int64(self.ruerup_index), "has_ruerup": np.bool_(bool(self.ruerup_plans)),
         }
 
-    def decide(self, t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
+    def decide(self, t: int, wealth: float, state: float = 1.0, extra_cashflow: float = 0.0) -> Dict[str, float]:
         """Optimal decision of month t for a given wealth (see module function ``decide``)."""
-        return decide(self.policy_dict(), t, wealth, equity_level)
+        return decide(self.policy_dict(), t, wealth, state, extra_cashflow)
 
     def cashflow_items(self) -> pd.DataFrame:
         """

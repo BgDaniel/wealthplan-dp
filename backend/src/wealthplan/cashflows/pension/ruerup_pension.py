@@ -7,7 +7,13 @@ from wealthplan.cashflows.pension.pension_plan import PensionPlan
 @dataclass
 class RuerupPension(PensionPlan):
     """
-    Basisrente (Rürup), fund-linked, with deterministic expected return.
+    Basisrente (Rürup), fund-linked.
+
+    With ``fund_linked`` (default) the contract capital follows the simulated equity paths of
+    the model (the same ETF simulation), so capital and pension differ per path; the optimizer
+    simulates them (``LSMCBellmanOptimizer``). Otherwise the capital grows with the
+    deterministic ``expected_return``; ``monthly_payout_brutto`` is that deterministic
+    (expected-return) pension.
 
     Savings phase: monthly contribution from ``start_date`` until the pension start; each
     contribution is reduced by the acquisition / distribution costs, the capital grows with
@@ -39,6 +45,8 @@ class RuerupPension(PensionPlan):
         Rentenfaktor: monthly pension per 10 000 € capital at the pension start.
     initial_capital : float
         Capital already saved at ``start_date``.
+    fund_linked : bool
+        Capital follows the simulated equity paths (True) or the deterministic expected return.
     """
 
     name: str
@@ -51,6 +59,7 @@ class RuerupPension(PensionPlan):
     acquisition_costs: float = 0.04
     pension_factor: float = 28.0
     initial_capital: float = 0.0
+    fund_linked: bool = True
     monthly_payout_brutto: float = field(init=False)
 
     def __post_init__(self) -> None:

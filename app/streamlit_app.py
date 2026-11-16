@@ -69,7 +69,7 @@ FIGURE_TITLES = {
     "09_regression": "Regression R²",
     "10_depletion": "Depletion risk",
     "11_taxes": "Taxes",
-    "12_ruerup_vs_etf": "Rürup vs. ETF",
+    "12_ruerup": "Rürup contract",
 }
 
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
@@ -487,14 +487,37 @@ def steering_page() -> None:
                                   step=1000.0)
         c3.markdown(f'<div class="facts">Defaults: {"configuration" if t == 0 else "median of the simulated paths"}'
                     f'<br>Total <b>{_eur(eq_now + sav_now)}</b></div>', unsafe_allow_html=True)
+        # fund-linked Rürup: its contract value (before) / pension (after the start) is a state of
+        # the policy and, in the payout phase, a path-dependent income
+        state, extra_nominal = 1.0, 0.0
+        if bool(policy.get("has_ruerup", False)):
+            r_idx = int(policy["ruerup_index"])
+            if t < r_idx:
+                cap_default = price * float(quant.get("ruerup_capital_p50", 0.0) or 0.0)
+                cap = c1.number_input("Rürup contract value [€]", value=round(max(cap_default, 0.0), -2),
+                                      min_value=0.0, step=1000.0, help="from your Rürup statement (Vertragsguthaben)")
+                state = cap / price + 1.0
+            else:
+                gross_default = price * float(quant.get("ruerup_gross_pension_p50", 0.0) or 0.0)
+                gross = c1.number_input("Rürup pension, gross [€/month]", value=float(round(max(gross_default, 0.0))),
+                                        min_value=0.0, step=10.0)
+                tp = next(cf for cf in LSMCConfigMapper.map_yaml_to_params(copy.deepcopy(params))["cashflows"]
+                          if hasattr(cf, "stochastic_plans"))
+                extra_nominal = float(tp.stochastic_net_payout(month, np.array([gross]))[0])
+                state = gross / price + 1.0
+                items = items.copy()
+                items["Rürup pension (net, simulated)"] = extra_nominal
+                c2.markdown(f'<div class="facts">net after the additional income tax: <b>{_eur(extra_nominal)}</b>'
+                            f'</div>', unsafe_allow_html=True)
 
-    d = decide(policy, t, (eq_now + sav_now) / price)
+    d = decide(policy, t, (eq_now + sav_now) / price, state, extra_nominal / price)
     for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings"):
         d[key] *= price  # back to nominal euros of the month
     reserve = price * float(policy["reserve"][t]) if "reserve" in policy else 0.0
     cat_file = run_dir / "cashflow_categories.json"
     cats = json.loads(cat_file.read_text()) if cat_file.exists() else {}
     income_cats = ("Salary", "Pensions (gross)", "Tax refund", "Social security", "Income tax")
+    cats["Rürup pension (net, simulated)"] = "Pensions (gross)"
     if cats:
         income = float(sum(v for k, v in items.items() if cats.get(k) in income_cats))
         fixed = float(-sum(v for k, v in items.items() if cats.get(k) not in income_cats))
@@ -578,14 +601,15 @@ def _private_plans(frame: pd.DataFrame, default_start: date) -> list[dict]:
     return plans
 
 
-RUERUP_COLUMNS = ["name", "monthly_contribution", "contribution_growth", "start_date", "expected_return",
-                  "running_costs", "acquisition_costs", "pension_factor", "initial_capital"]
+RUERUP_COLUMNS = ["name", "monthly_contribution", "contribution_growth", "start_date", "fund_linked",
+                  "expected_return", "running_costs", "acquisition_costs", "pension_factor", "initial_capital"]
 RUERUP_DEFAULTS = {"contribution_growth": 0.0, "expected_return": 0.06, "running_costs": 0.012,
                    "acquisition_costs": 0.04, "pension_factor": 28.0, "initial_capital": 0.0}
 
 
 def _ruerup_frame(plans: list[dict], default_start: date) -> pd.DataFrame:
     rows = [{"name": p.get("name", "Rürup"), "monthly_contribution": float(p["monthly_contribution"]),
+             "fund_linked": bool(p.get("fund_linked", True)),
              **{k: float(p.get(k, v)) for k, v in RUERUP_DEFAULTS.items()},
              "start_date": _as_date(p.get("start_date", default_start))} for p in plans]
     return pd.DataFrame(rows, columns=RUERUP_COLUMNS)
@@ -599,7 +623,8 @@ def _ruerup_plans(frame: pd.DataFrame, default_start: date) -> list[dict]:
             continue
         start = r.get("start_date")
         plan = {"name": r["name"], "monthly_contribution": float(r["monthly_contribution"]),
-                "start_date": default_start if start is None or start != start else _as_date(start)}
+                "start_date": default_start if start is None or start != start else _as_date(start),
+                "fund_linked": True if r.get("fund_linked") is None else bool(r["fund_linked"])}
         for k, v in RUERUP_DEFAULTS.items():
             value = r.get(k)
             plan[k] = float(v if value is None or value != value else value)
@@ -718,7 +743,8 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                                      for p in pension.get("public_pension_plan", []))),
                                      min_value=0.0, step=50.0)
             st.caption("Basisrente (Rürup): contributions until retirement (tax deductible), lifelong pension "
-                       "= capital / 10 000 × pension factor, taxed with the Besteuerungsanteil. Rates as "
+                       "= capital / 10 000 × pension factor, taxed with the Besteuerungsanteil. fund_linked: the "
+                       "capital follows the simulated ETF paths (expected_return is then unused). Rates as "
                        "fractions (0.06 = 6 %).")
             ruerup = st.data_editor(_ruerup_frame(pension.get("ruerup_plans", []), _as_date(sim["start_date"])),
                                     num_rows="dynamic", width="stretch", key=f"rue_{name}",

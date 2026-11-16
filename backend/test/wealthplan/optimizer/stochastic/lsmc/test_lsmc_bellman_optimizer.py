@@ -72,7 +72,7 @@ class TestKernels(unittest.TestCase):
     def test_bellman_matches_brute_force(self) -> None:
         cont = crra_utility(self.grid * 1.01, 2.0, 1.0)[None, :]
         y, beta = 1500.0, 0.99
-        values = bellman_values(self.grid, cont, y, beta, 2.0, 1.0, 1.0)[0]
+        values = bellman_values(self.grid, cont, np.array([y]), beta, 2.0, 1.0, 1.0)[0]
         for j in (0, 5, 20, 40):
             m = self.grid[j] + y
             x = np.linspace(0.0, m, 200_001)

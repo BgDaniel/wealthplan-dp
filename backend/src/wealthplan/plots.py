@@ -261,7 +261,8 @@ def taxes(opt, t) -> Figure:
     age = det["age"].values
     fig, ax = plt.subplots(figsize=(11, 4.6))
     _fan(ax, age, cap, BLUE, "Capital gains tax", outer=False)
-    ax.plot(age, det["income_tax"].values, color=PURPLE, ls="--", label="Income tax on pensions")
+    ax.plot(age, det["income_tax"].values, color=PURPLE, ls="--",
+            label="Income tax on pensions (Rürup part: median)")
     if det["rurup_refund"].abs().sum() > 0:
         ax.plot(age, -det["rurup_refund"].values, color=t["muted"], ls=":", lw=1.6,
                 label="Rürup tax refund (negative tax)")
@@ -273,33 +274,23 @@ def taxes(opt, t) -> Figure:
     return fig
 
 
-def ruerup_vs_etf_plot(opt, t) -> Figure:
-    """Expected cumulative net cash of the Rürup plan vs. an ETF plan with the same net cost."""
-    from wealthplan.analysis import ruerup_vs_etf
-
-    frame, info = ruerup_vs_etf(opt)
+def ruerup(opt, t) -> Figure:
+    """Fund-linked Rürup contract: capital until the pension start (fan), net pension afterwards."""
     fig, ax = plt.subplots(figsize=(11, 4.6))
-    ax.set(title="Rürup vs. ETF savings plan (same net cost) – expected cumulative net cash", xlabel="Age")
-    if frame.empty:
-        ax.text(0.5, 0.5, "no Rürup plan configured", transform=ax.transAxes, ha="center", va="center",
-                color=t["muted"])
+    ax.set(title="Rürup contract: capital on the ETF paths (real)", xlabel="Age")
+    if not opt.ruerup_plans:
+        ax.text(0.5, 0.5, "no fund-linked Rürup plan configured", transform=ax.transAxes, ha="center",
+                va="center", color=t["muted"])
         return fig
-    ax.plot(frame["age"], frame["ruerup_cum"], color=PURPLE, label="Rürup (paid while alive)")
-    ax.plot(frame["age"], frame["etf_cum"], color=BLUE, ls="--", label="ETF withdrawals (paid while alive)")
-    ax.plot(frame["age"], frame["etf_cum_with_heirs"], color=BLUE, ls=":", lw=1.4,
-            label="ETF incl. capital left to heirs")
-    ax.axhline(0.0, color=t["muted"], lw=0.8)
-    be = info["break_even_age"]
-    if be is not None:
-        ax.axvline(be, color=t["muted"], lw=1.0, ls="-.")
-        ax.text(be, ax.get_ylim()[0], f" break-even {be:.0f}", color=t["fg"], va="bottom", fontsize=9)
-    text = (f"net cost {info['net_monthly_cost']:,.0f} €/month\n"
-            f"capital at retirement: Rürup {info['ruerup_capital_at_retirement'] / 1e3:,.0f} k€, "
-            f"ETF {info['etf_capital_at_retirement'] / 1e3:,.0f} k€\n"
-            f"Rürup net pension {info['ruerup_net_pension']:,.0f} €/month · "
-            f"ETF withdrawal {info['etf_monthly_withdrawal']:,.0f} €/month")
-    ax.text(0.99, 0.03, text, transform=ax.transAxes, ha="right", va="bottom", fontsize=9, color=t["fg"],
-            bbox=dict(facecolor=t["bg"], edgecolor=t["grid"], boxstyle="round,pad=0.5"))
+    r = opt.ruerup_index
+    _fan(ax, opt.age_grid[:r], opt.opt_ruerup_capital.values[:r], PURPLE, "Contract capital")
+    pension = opt.opt_extra_cashflow.values[min(r, opt.n_months - 1)]
+    if np.isfinite(pension).any():
+        q = np.nanpercentile(pension, (5, 50, 95))  # net pension of the first payout month (real)
+        ax.text(0.99, 0.04, f"net Rürup pension at start (real, €/month)\nmedian {q[1]:,.0f} · "
+                f"5 % {q[0]:,.0f} · 95 % {q[2]:,.0f}", transform=ax.transAxes, ha="right", va="bottom",
+                fontsize=9, color=t["fg"], bbox=dict(facecolor=t["bg"], edgecolor=t["grid"], boxstyle="round,pad=0.5"))
+    ax.set_ylim(bottom=0)
     _euro(ax)
     _retirement(ax, opt, t)
     ax.legend(loc="upper left")
@@ -341,7 +332,7 @@ FIGURES: Dict[str, Tuple[str, Callable]] = {
     "09_regression": ("Regression R²", regression),
     "10_depletion": ("Depletion risk", depletion),
     "11_taxes": ("Taxes", taxes),
-    "12_ruerup_vs_etf": ("Rürup vs. ETF", ruerup_vs_etf_plot),
+    "12_ruerup": ("Rürup contract", ruerup),
 }
 
 

@@ -1,6 +1,8 @@
 import datetime as dt
 import unittest
 
+import numpy as np
+
 from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan import PrivatePensionPlan
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
 from wealthplan.cashflows.pension.ruerup_pension import RuerupPension
@@ -63,7 +65,7 @@ class TestTotalPension(unittest.TestCase):
     def setUp(self) -> None:
         self.retirement = dt.date(2055, 7, 1)
         self.ruerup = RuerupPension(name="Rürup", monthly_contribution_amount=600.0, start_date=dt.date(2026, 1, 1),
-                                    pension_start=self.retirement)
+                                    pension_start=self.retirement, fund_linked=False)
         self.pension = TotalPension(
             pensions=[
                 PublicPensionPlan(monthly_payout_brutto=3100.0),
@@ -97,6 +99,20 @@ class TestTotalPension(unittest.TestCase):
         share = TaxModel.taxable_share_basis_pension(2055)
         taxable = (3100.0 + self.ruerup.monthly_payout_brutto) * share + 0.18 * 200.0
         self.assertAlmostEqual(-parts["Income tax on pensions"], 0.2 * (12 * taxable - 102.0) / 12, places=6)
+
+    def test_stochastic_net_payout_matches_deterministic_tax(self) -> None:
+        """A fund-linked plan's per-path net payout equals the deterministic one for the same gross."""
+        date = dt.date(2060, 1, 1)
+        deterministic = self.pension.components(date)
+        self.ruerup.fund_linked = True
+        others = self.pension.components(date)  # without the Rürup pension now
+        gross = self.ruerup.monthly_payout_brutto
+        net = self.pension.stochastic_net_payout(date, np.array([gross, 0.0]))
+        total_det = sum(deterministic.values())
+        total_stoch = sum(others.values()) + net[0]
+        self.assertAlmostEqual(total_stoch, total_det, delta=0.05)  # grid interpolation of the tax
+        self.assertAlmostEqual(net[1], 0.0, places=9)
+        self.assertEqual(self.pension.stochastic_net_payout(dt.date(2030, 1, 1), np.array([gross]))[0], 0.0)
 
 
 if __name__ == "__main__":

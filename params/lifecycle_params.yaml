@@ -92,7 +92,8 @@ total_pension:
       monthly_contribution: 600     # constant contribution (€/month)
       contribution_growth: 0.0      # yearly increase (Dynamik)
       start_date: 2026-01-01
-      expected_return: 0.06         # expected fund return p.a. before costs
+      fund_linked: true             # capital follows the simulated ETF paths (false: expected_return below)
+      expected_return: 0.06         # only with fund_linked: false
       running_costs: 0.012          # fund TER + contract costs p.a.
       acquisition_costs: 0.04       # share of every contribution for acquisition / distribution
       pension_factor: 28.0          # Rentenfaktor: €/month per 10 000 € capital
@@ -152,7 +153,7 @@ tax:
 stochastic:
   yearly_return: 0.07      # expected yearly equity return
   sigma: 0.18              # yearly equity volatility
-  n_sims: 2000             # regression paths (backward induction)
+  n_sims: 4000             # regression paths (backward induction)
   n_sims_oos: 10000        # out-of-sample paths (forward simulation)
   seed: 2906
 
@@ -171,7 +172,7 @@ technical:
   n_wealth: 200            # wealth grid points, denser at low wealth
   n_equity_shares: 11      # equity share grid 0 %, 10 %, ..., max_equity_share
   max_equity_share: 1.0
-  regression_degree: 0     # LSMC degree in the log equity level (0: i.i.d. GBM, see README)
+  regression_degree: 2     # LSMC degree in the log of the state (fund-linked Rürup capital / pension; see README)
   shortfall_penalty: 1.0   # utility per euro of fixed expenses that cannot be paid
   apply_terminal_penalty: false
   use_cache: true

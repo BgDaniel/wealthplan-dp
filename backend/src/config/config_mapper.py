@@ -340,6 +340,7 @@ class ConfigMapper:
                     acquisition_costs=float(p.get("acquisition_costs", 0.04)),
                     pension_factor=float(p.get("pension_factor", 28.0)),
                     initial_capital=float(p.get("initial_capital", 0.0)),
+                    fund_linked=bool(p.get("fund_linked", True)),
                 )
             )
 

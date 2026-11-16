@@ -25,7 +25,7 @@ poetry run streamlit run app/streamlit_app.py
   the table shows progress, remaining time and key figures.
 * **Result**: key figures, figures (wealth, consumption, equity share, equity vs. savings
   holdings, monthly buy/sell per asset, saving/withdrawal, equity policy map, survival,
-  regression R², depletion risk, taxes per year, Rürup vs. ETF plan),
+  regression R², depletion risk, taxes per year, Rürup contract),
   runtimes, downloads.
 * **Compare**: median curves, key figures and differing parameters of up to four runs.
 * **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete), incl.
@@ -66,16 +66,18 @@ u CRRA utility with risk aversion γ:
 
 **LSMC step.** For every regression path s, grid point x_j of the invested amount and equity
 share a_k the realised value p_t V_{t+1}(x_j G_{k,s}, s) is regressed on a polynomial in the
-path's log equity level (`WealthRegressor`). The best a_k per (x_j, s) gives the equity
+path's log regression state (`WealthRegressor`; see below). The best a_k per (x_j, s) gives the equity
 share; the consumption is solved in closed form on each grid segment
 (u'(c) = β · slope of the continuation value). The forward simulation re-evaluates the
 regression on fresh **out-of-sample** paths with simulated death times.
 
-**Regression degree.** With i.i.d. GBM returns the equity level carries no information
-about future returns, so degree 0 (constant basis, i.e. the Monte Carlo mean) is the
-default. Higher degrees overfit: in a test with 2 000 regression paths the out-of-sample
-value dropped from −0.0765 (degree 0) to −0.0769 (1) and −0.0773 (3), with standard error
-0.0004. A degree > 0 only makes sense for a market model with a state, e.g. mean reversion.
+**Regression degree / state.** The regression state is the fund-linked Rürup capital
+(before) or Rürup pension (after the pension start) of the path: it determines future income, so
+the policy depends on it. Without such a plan the state is the equity level, which carries no
+information for i.i.d. GBM returns (use degree 0 then: higher degrees only add noise). With the
+Rürup state, degree 2 needs enough paths: out-of-sample value −0.10187 (2 000 paths) vs.
+−0.10154 (6 000 paths) vs. −0.10153 for degree 0, i.e. the information is real (R² ≈ 0.9) but
+its value is small at a ~450 €/month pension. Default: degree 2 with 4 000 regression paths.
 
 **Variance reduction.** The normal draws of the regression paths are moment matched per
 month (mean 0, variance 1), so the comparison between equity shares is not distorted by
@@ -144,16 +146,12 @@ simulation and Steering page).
 ## Rürup (`ruerup_plans` under `total_pension`)
 
 Constant (or growing) monthly contribution until retirement; each contribution minus the
-acquisition costs is invested at the expected fund return minus the running costs
-(deterministic); monthly pension = capital / 10 000 × pension factor (Rentenfaktor), lifelong,
-no death benefit.
-
-## Rürup vs. ETF (figure 12, `wealthplan.analysis.ruerup_vs_etf`)
-
-Same net cost per month (contribution minus tax refund) into an ETF (equity return minus TER,
-taxed as in the model); from retirement a level withdrawal that empties the ETF at the plan
-end, against the Rürup pension net of the additional income tax it causes. Flows weighted with
-the survival probability; the ETF capital left at death is shown separately (heirs).
+acquisition costs buys fund units. With `fund_linked: true` (default) the contract capital follows
+the **simulated equity paths** of the model (same ETF simulation, no tax inside the contract) minus
+the running costs, so capital and pension differ per path; `fund_linked: false` uses the
+deterministic `expected_return`. Monthly pension = capital / 10 000 × pension factor
+(Rentenfaktor), lifelong, nominally fixed, no death benefit; taxed with the Besteuerungsanteil as
+the additional income tax on top of the other pensions (per path).
 
 ## Validation against closed forms (`python -m wealthplan.validation`, app page Validation)
 
