@@ -6,6 +6,7 @@ the palette checks on the navy surface; as blue / purple stay close for colour-b
 two-series charts also differ in line style (solid / dashed) and carry direct labels.
 """
 
+import warnings
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
@@ -72,6 +73,25 @@ def _fan(ax, age: np.ndarray, data: np.ndarray, color: str, label: str, outer: b
     ax.plot(age, q[2], color=color, ls=ls, label=f"{label} (median)")
 
 
+def _yearly_mean(opt, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Monthly average per calendar year (smooths the bonus month and yearly insurances).
+
+    data has shape (T,) or (T, n_paths); NaN (dead) is ignored. Returns (age at the start of
+    each year, yearly means).
+    """
+    years = np.array([m.year for m in opt.months])
+    uniq = np.unique(years)
+    ages = np.array([opt.age_grid[np.argmax(years == y)] for y in uniq])
+    shape = (uniq.size,) + data.shape[1:]
+    out = np.full(shape, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN years (dead paths)
+        for i, y in enumerate(uniq):
+            out[i] = np.nanmean(data[years == y], axis=0)
+    return ages, out
+
+
 def _label_end(ax, age: np.ndarray, data: np.ndarray, text: str, color: str, t) -> None:
     """Direct label at the median's peak (secondary encoding next to the colour)."""
     med = _quantiles(data)[2]
@@ -94,7 +114,9 @@ def wealth(opt, t) -> Figure:
 def consumption(opt, t) -> Figure:
     fig, ax = plt.subplots(figsize=(11, 4.6))
     _fan(ax, opt.age_grid, opt.opt_consumption.values, PURPLE, "Consumption")
-    ax.plot(opt.age_grid, opt.cf, color=t["muted"], lw=1.3, ls="--", label="Net cashflow (income − fixed costs)")
+    ages, cf_year = _yearly_mean(opt, opt.cf)
+    ax.step(ages, cf_year, where="post", color=t["muted"], lw=1.3, ls="--",
+            label="Net cashflow (income − fixed costs), monthly average of the year")
     ax.set(title="Monthly consumption", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
@@ -135,11 +157,15 @@ def flows(opt, t) -> Figure:
     sav = opt.opt_invested.values - eq
     buy_eq = eq - opt.opt_equity_before.values
     buy_sav = sav - opt.opt_savings_before.values
+    buy_eq[0] = np.nan  # initial reallocation of the starting wealth
+    buy_sav[0] = np.nan
+    ages, eq_year = _yearly_mean(opt, buy_eq)
+    _, sav_year = _yearly_mean(opt, buy_sav)
     fig, ax = plt.subplots(figsize=(11, 4.6))
-    _fan(ax, opt.age_grid[1:], buy_eq[1:], BLUE, "Equity", outer=False)
-    _fan(ax, opt.age_grid[1:], buy_sav[1:], PURPLE, "Savings account", outer=False, ls="--")
+    _fan(ax, ages, eq_year, BLUE, "Equity", outer=False)
+    _fan(ax, ages, sav_year, PURPLE, "Savings account", outer=False, ls="--")
     ax.axhline(0.0, color=t["muted"], lw=1.0)
-    ax.set(title="Monthly investment per asset: buy (+) / sell (−)", xlabel="Age")
+    ax.set(title="Investment per asset: buy (+) / sell (−), monthly average of each year", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
     ax.legend(loc="lower left", ncol=2)
@@ -148,9 +174,10 @@ def flows(opt, t) -> Figure:
 
 def investment(opt, t) -> Figure:
     fig, ax = plt.subplots(figsize=(11, 4.6))
-    _fan(ax, opt.age_grid, opt.cf[:, None] - opt.opt_consumption.values, PURPLE, "Saving")
+    ages, saving = _yearly_mean(opt, opt.cf[:, None] - opt.opt_consumption.values)
+    _fan(ax, ages, saving, PURPLE, "Saving")
     ax.axhline(0.0, color=t["muted"], lw=1.0)
-    ax.set(title="Monthly saving (+) / withdrawal (−)", xlabel="Age")
+    ax.set(title="Saving (+) / withdrawal (−), monthly average of each year", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
     ax.legend(loc="lower left")
