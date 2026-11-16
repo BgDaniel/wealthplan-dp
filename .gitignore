@@ -209,3 +209,7 @@ __marimo__/
 # Cache folder for BellmanOptimizer
 cache/
 
+
+# Results, runs and solver cache of wealthplan
+results/
+.cache/

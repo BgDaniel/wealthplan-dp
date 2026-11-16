@@ -1,8 +1,10 @@
 import os
 import pickle
 import datetime as dt
+import hashlib
+import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Public keys used by optimizers
 VALUE_FUNCTION_KEY: str = "value_function"
@@ -22,10 +24,20 @@ class ResultCache:
     When disabled, all cache operations become no-ops.
 
     The base cache directory can be configured via the environment variable
-    ``CACHE_FOLDER``. If not set, ``./.cache`` is used.
+    ``CACHE_FOLDER`` (or the ``cache_root`` argument). If not set, ``./.cache`` is used.
+
+    Results are stored under ``<cache_root>/<run_id>_<params_hash>/``: a run with changed
+    parameters gets a fresh folder instead of silently loading stale results.
     """
 
-    def __init__(self, run_id: str, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        *,
+        enabled: bool = True,
+        params_hash: str = "",
+        cache_root: Optional[str | Path] = None,
+    ) -> None:
         """
         Initialize a local_training result cache for a given optimizer run.
 
@@ -38,6 +50,12 @@ class ResultCache:
         enabled : bool, default=True
             Whether the cache is active.
             If False, the cache is fully disabled.
+
+        params_hash : str, default=""
+            Hash of all parameters the cached results depend on (see :func:`params_hash`).
+
+        cache_root : str | Path, optional
+            Base folder; defaults to ``$CACHE_FOLDER`` or ``./.cache``.
         """
         self.enabled: bool = enabled
 
@@ -46,11 +64,10 @@ class ResultCache:
             self.cache_dir: Path | None = None
             return
 
-        base_path: Path = Path(
-            os.getenv(CACHE_FOLDER_ENV, "./.cache")
-        )
+        base_path: Path = Path(cache_root or os.getenv(CACHE_FOLDER_ENV, "./.cache"))
 
-        self.cache_dir = base_path / run_id
+        folder = f"{run_id}_{params_hash}" if params_hash else run_id
+        self.cache_dir = base_path / folder
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -147,6 +164,27 @@ class ResultCache:
             return
 
         path: Path = self.cache_dir / self._date_to_filename(date_t)
+        tmp: Path = path.with_suffix(".tmp")
 
-        with open(path, "wb") as f:
+        with open(tmp, "wb") as f:
             pickle.dump(data, f)
+
+        tmp.replace(path)  # atomic: an interrupted run never leaves a half-written file
+
+
+def params_hash(params: Dict[str, Any]) -> str:
+    """
+    Short stable hash of a parameter dictionary (dates and other objects via ``str``).
+
+    Parameters
+    ----------
+    params : Dict[str, Any]
+        JSON-like parameters (e.g. the YAML dictionary).
+
+    Returns
+    -------
+    str
+        First 12 hex characters of the SHA-256 of the sorted JSON dump.
+    """
+    raw = json.dumps(params, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]

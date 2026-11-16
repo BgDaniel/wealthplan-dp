@@ -1,5 +1,4 @@
-from typing import Any, Dict, List, Type, Callable
-import numpy as np
+from typing import Any, Dict, List, Type
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
 from wealthplan.cashflows.salary import Salary
@@ -67,25 +66,14 @@ KEY_TAXABLE_EARNINGS_SHARE: str = "taxable_earnings_share"
 KEY_CONTRIBUTION_GROWTH_RATE: str = "contribution_growth_rate"
 KEY_START_DATE_PLAN: str = "start_date"
 
-KEY_TECHNICAL = "technical"
-KEY_W_MAX = "w_max"
-KEY_W_STEP = "w_step"
-KEY_C_STEP = "c_step"
-KEY_USE_CACHE = "use_cache"
-KEY_FUNCTIONS = "functions"
-KEY_UTILITY_FUNCTION = "utility_function"
-
-KEY_USE_CACHE: str = "use_cache"
+KEY_CURRENT_AGE: str = "current_age"
 KEY_BETA: str = "beta"
 
-KEY_W_MAX: str = "w_max"
-KEY_W_STEP: str = "w_step"
-KEY_C_STEP: str = "c_step"
-
+KEY_TECHNICAL: str = "technical"
+KEY_USE_CACHE: str = "use_cache"
+KEY_UTILITY_FUNCTION: str = "utility_function"
 KEY_GAMMA: str = "gamma"
 KEY_EPSILON: str = "epsilon"
-
-KEY_USE_CACHE: str = "use_cache"
 
 
 class ConfigMapper:
@@ -120,6 +108,8 @@ class ConfigMapper:
             KEY_RETIREMENT_DATE: sim[KEY_RETIREMENT_DATE],
             KEY_INITIAL_WEALTH: sim[KEY_INITIAL_WEALTH],
             KEY_YEARLY_RETURN_SAVINGS: sim[KEY_YEARLY_RETURN_SAVINGS],
+            KEY_CURRENT_AGE: float(sim[KEY_CURRENT_AGE]),
+            KEY_BETA: float(sim[KEY_BETA]),
             KEY_CASHFLOWS: cashflows,
         }
 
@@ -229,15 +219,15 @@ class ConfigMapper:
         return [TotalPension(pensions=pension_plans, retirement_date=retirement_date)]
 
     @staticmethod
-    def _load_crra_params(data: Dict[str, Any]) -> Callable[[np.ndarray], np.ndarray]:
+    def _load_crra_params(data: Dict[str, Any]) -> Dict[str, float]:
         """
-        Load a Numba-accelerated utility function from the configuration.
+        Load the CRRA utility parameters from the configuration.
 
         Args:
-            functions: Dictionary containing 'utility_function' config.
+            data: Parsed YAML configuration.
 
         Returns:
-            Callable: Numba-accelerated utility function.
+            Dictionary with gamma and epsilon.
         """
         utility_function: Dict[str, Any] = data.get(KEY_UTILITY_FUNCTION, {})
 
@@ -245,6 +235,3 @@ class ConfigMapper:
             KEY_GAMMA: float(utility_function.get(KEY_GAMMA, 0.5)),
             KEY_EPSILON: float(utility_function.get(KEY_EPSILON, 1e-8))
         }
-
-
-

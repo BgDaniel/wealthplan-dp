@@ -4,9 +4,12 @@ import pandas as pd
 
 import unittest
 import numpy as np
-import matplotlib.pyplot as plt
+import matplotlib
 
-from wealthplan.optimizer.stochastic import SurvivalProcess
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+from wealthplan.optimizer.stochastic.survival_process.survival_process import SurvivalProcess  # noqa: E402
 
 
 class TestSurvivalProcess(unittest.TestCase):
@@ -15,7 +18,7 @@ class TestSurvivalProcess(unittest.TestCase):
     suitable for life insurance mortality modeling.
     """
 
-    PLOT: bool = True
+    PLOT: bool = False
 
     @staticmethod
     def _monthly_dates(start: dt.date, end: dt.date) -> List[dt.date]:
@@ -83,8 +86,6 @@ class TestSurvivalProcess(unittest.TestCase):
             plt.figure(figsize=(8, 5))
             plt.hist(death_times, bins=100, density=True, alpha=0.5, label="Empirical PDF")
             plt.plot(t_grid, pdf, "r--", linewidth=2, label="Theoretical Gompertz PDF")
-            # Expected age (approx)
-            expected_remaining = (1 / c) * np.log(1 + (c / b) * death_times.mean())
             plt.axvline(death_times.mean(), color="black", linestyle=":", linewidth=2,
                         label=f"Empirical mean = {death_times.mean():.1f} yrs")
             plt.title("Distribution of Death Times (Gompertz)")
@@ -94,8 +95,10 @@ class TestSurvivalProcess(unittest.TestCase):
             plt.grid(True)
             plt.show()
 
-        # Sanity check: empirical mean > 0
-        self.assertGreater(death_times.mean(), 0.0)
+        # Empirical survival matches the Gompertz survival function
+        alive_share = paths.mean(axis=0)
+        theory = np.exp(-(b / c) * (np.exp(c * (age + times)) - np.exp(c * age)))
+        np.testing.assert_allclose(alive_share, theory, atol=0.02)
 
 if __name__ == "__main__":
     unittest.main()

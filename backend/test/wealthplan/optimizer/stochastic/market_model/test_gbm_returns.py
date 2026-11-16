@@ -3,9 +3,12 @@ import pandas as pd
 from typing import List, Tuple
 import unittest
 import numpy as np
-import matplotlib.pyplot as plt
+import matplotlib
 
-from wealthplan.optimizer.stochastic import GBM
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+from wealthplan.optimizer.stochastic.market_model.gbm_returns import GBM  # noqa: E402
 
 
 class TestGBM(unittest.TestCase):
@@ -17,7 +20,7 @@ class TestGBM(unittest.TestCase):
     Optional plotting shows the ± corridor around theoretical values.
     """
 
-    PLOT: bool = True  # Set True to visualize results
+    PLOT: bool = False  # Set True to visualize results
 
     @staticmethod
     def _year_fractions(dates: List[dt.date]) -> np.ndarray:
@@ -58,7 +61,7 @@ class TestGBM(unittest.TestCase):
         seed: int = 123
 
         dates: List[dt.date] = TestGBM._generate_monthly_dates()
-        gbm: GBM = GBM(mu=mu, sigma=sigma, seed=seed)
+        gbm: GBM = GBM(yearly_return=np.exp(mu) - 1.0, sigma=sigma, seed=seed)
         paths: np.ndarray = gbm.simulate(n_sims=n_sims, dates=dates, s0=s0)
         times: np.ndarray = TestGBM._year_fractions(dates)
 
@@ -83,7 +86,6 @@ class TestGBM(unittest.TestCase):
         tol_array: np.ndarray = tol * theoretical_mean
         outside_mask: np.ndarray = np.abs(empirical_mean - theoretical_mean) > tol_array
 
-        # Plot always
         plt.figure()
         plt.plot(times, empirical_mean, label="Empirical Mean")
         plt.plot(times, theoretical_mean, "--", label="Theoretical Mean")
@@ -100,7 +102,9 @@ class TestGBM(unittest.TestCase):
         plt.ylabel("Value")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        if self.PLOT:
+            plt.show()
+        plt.close("all")
 
         # Assertion after plotting
         np.testing.assert_allclose(empirical_mean, theoretical_mean, rtol=tol)
@@ -124,7 +128,6 @@ class TestGBM(unittest.TestCase):
         tol_array: np.ndarray = tol * theoretical_mean
         outside_mask: np.ndarray = np.abs(empirical_mean - theoretical_mean) > tol_array
 
-        # Plot always
         plt.figure()
         plt.plot(times, empirical_mean, label="Empirical Mean")
         plt.plot(times, theoretical_mean, "--", label="Theoretical Mean")
@@ -141,7 +144,9 @@ class TestGBM(unittest.TestCase):
         plt.ylabel("Value")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        if self.PLOT:
+            plt.show()
+        plt.close("all")
 
         # Assertion after plotting
         np.testing.assert_allclose(empirical_mean, theoretical_mean, rtol=tol)
@@ -165,7 +170,6 @@ class TestGBM(unittest.TestCase):
         tol_array: np.ndarray = rtol * theoretical_var
         outside_mask: np.ndarray = np.abs(empirical_var - theoretical_var) > tol_array
 
-        # Plot always
         plt.figure()
         plt.plot(times, empirical_var, label="Empirical Variance")
         plt.plot(times, theoretical_var, "--", label="Theoretical Variance")
@@ -182,7 +186,9 @@ class TestGBM(unittest.TestCase):
         plt.ylabel("Variance")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        if self.PLOT:
+            plt.show()
+        plt.close("all")
 
         # Assertion after plotting
         np.testing.assert_allclose(empirical_var, theoretical_var, rtol=rtol)

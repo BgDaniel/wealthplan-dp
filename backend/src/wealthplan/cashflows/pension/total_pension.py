@@ -30,19 +30,21 @@ class TotalPension(CashflowBase):
         self.pensions = pensions
         self.retirement_date: dt.date = retirement_date
 
-    @staticmethod
-    def _progressive_tax(income: float) -> float:
-        """Simplified German-like progressive tax rate."""
-        if income <= 10000:
-            return 0.0
-        elif 10001 <= income <= 15000:
-            return 0.17
-        elif 15001 <= income <= 60000:
-            return 0.31
-        elif 60001 <= income <= 277000:
-            return 0.42
-        else:
-            return 0.45
+    # Simplified German-like brackets: (upper bound of yearly taxable income, rate).
+    TAX_BRACKETS = ((10_000.0, 0.0), (15_000.0, 0.17), (60_000.0, 0.31), (277_000.0, 0.42),
+                    (float("inf"), 0.45))
+
+    @classmethod
+    def _progressive_tax(cls, yearly_income: float) -> float:
+        """Simplified German-like progressive tax rate for a *yearly* taxable income.
+
+        The brackets are contiguous (the former version left gaps such as 10000 < x < 10001,
+        which fell through to the 45 % rate).
+        """
+        for upper, rate in cls.TAX_BRACKETS:
+            if yearly_income <= upper:
+                return rate
+        return cls.TAX_BRACKETS[-1][1]
 
     def cashflow(self, delivery_date: dt.date) -> float:
         """
@@ -78,7 +80,8 @@ class TotalPension(CashflowBase):
                 else:
                     raise TypeError(f"Unsupported pension type: {type(p).__name__}")
 
-            tax_rate = self._progressive_tax(total_taxable_income)
+            # brackets are yearly, the pension is monthly
+            tax_rate = self._progressive_tax(12.0 * total_taxable_income)
 
             tax = total_taxable_income * tax_rate
             net_total = total_brutto - tax
