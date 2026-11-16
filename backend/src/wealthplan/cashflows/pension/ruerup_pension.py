@@ -72,7 +72,8 @@ class RuerupPension(PensionPlan):
         capital = self.initial_capital
         y, m = self.start_date.year, self.start_date.month
         while (y, m) < (self.pension_start.year, self.pension_start.month):
-            capital = capital * monthly_growth + (1.0 - self.acquisition_costs) * self.monthly_contribution(
-                dt.date(y, m, 1))
+            # contribution at the start of the month, then one month of growth
+            capital = (capital + (1.0 - self.acquisition_costs) * self.monthly_contribution(
+                dt.date(y, m, 1))) * monthly_growth
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
         return capital

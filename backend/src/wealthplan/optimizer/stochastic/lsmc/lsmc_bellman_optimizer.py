@@ -277,8 +277,8 @@ def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, share
 @nb.njit(parallel=True, cache=True)
 def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds: np.ndarray, degrees: np.ndarray,
                   shares: np.ndarray, cashflows: np.ndarray, equity: np.ndarray, alive: np.ndarray, w0: float,
-                  equity0: float, rf: float, equity_tax: float, beta: float, gamma: float, epsilon: float,
-                  terminal_consume: bool):
+                  equity0: float, rf: float, equity_tax: float, savings_tax: float, beta: float, gamma: float,
+                  epsilon: float, terminal_consume: bool):
     """
     Simulate the optimal policy on out-of-sample paths.
 
@@ -288,9 +288,10 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
 
     Returns
     -------
-    wealth, consumption, equity_share, invested, equity_before, savings_before :
+    wealth, consumption, equity_share, invested, equity_before, savings_before, capital_tax :
         np.ndarray, shape (T, n_paths), NaN after death. ``*_before`` are the holdings at the
-        start of the month (before consumption and rebalancing).
+        start of the month (before consumption and rebalancing); ``capital_tax`` is the capital
+        gains tax on the returns of month t (negative: loss credited).
     """
     n_paths, n_t = equity.shape
     n_w = grid.shape[0]
@@ -300,6 +301,7 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
     invested = np.full((n_t, n_paths), np.nan)
     eq_before = np.full((n_t, n_paths), np.nan)
     sav_before = np.full((n_t, n_paths), np.nan)
+    cap_tax = np.full((n_t, n_paths), np.nan)
     d_max = coeffs.shape[1]
     for p in nb.prange(n_paths):
         eq_hold = min(max(equity0, 0.0), w0)
@@ -337,7 +339,10 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
             r = equity[p, t + 1] / equity[p, t]
             eq_hold = alpha * x * (1.0 + (r - 1.0) * (1.0 - equity_tax))
             sav_hold = (1.0 - alpha) * x * rf
-    return wealth, cons, share, invested, eq_before, sav_before
+            # rf is after tax: pre-tax interest = after-tax interest / (1 - savings_tax)
+            cap_tax[t, p] = alpha * x * (r - 1.0) * equity_tax + (1.0 - alpha) * x * (rf - 1.0) * savings_tax / (
+                1.0 - savings_tax)
+    return wealth, cons, share, invested, eq_before, sav_before, cap_tax
 
 
 def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
@@ -540,6 +545,7 @@ class LSMCBellmanOptimizer:
         self.opt_invested = pd.DataFrame()
         self.opt_equity_before = pd.DataFrame()
         self.opt_savings_before = pd.DataFrame()
+        self.opt_capital_tax = pd.DataFrame()
         self.survival_paths = np.empty((0, 0))
         self.monthly_cashflows = pd.Series(self.cf, index=self.months)
 
@@ -640,10 +646,12 @@ class LSMCBellmanOptimizer:
         oos_seed = None if self.seed is None else self.seed + 1
         equity = self._equity_paths(self.n_sims_oos, oos_seed)
         self.survival_paths = self.survival_process.simulate(n_sims=self.n_sims_oos, dates=self.months)
-        wealth, cons, share, invested, eq_before, sav_before = forward_paths(
+        wealth, cons, share, invested, eq_before, sav_before, cap_tax = forward_paths(
             self.wealth_grid, self.coeffs, self.state_mean, self.state_std, self.state_degree, self.equity_shares,
             self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf,
-            self.equity_tax_rate, self.beta, self.gamma, self.epsilon, not self.apply_terminal_penalty)
+            self.equity_tax_rate, self.savings_tax_rate, self.beta, self.gamma, self.epsilon,
+            not self.apply_terminal_penalty)
+        self.opt_capital_tax = pd.DataFrame(cap_tax, index=self.months)
         self.opt_equity_before = pd.DataFrame(eq_before, index=self.months)
         self.opt_savings_before = pd.DataFrame(sav_before, index=self.months)
         self.opt_wealth = pd.DataFrame(wealth, index=self.months)
@@ -772,6 +780,25 @@ class LSMCBellmanOptimizer:
                     row[key] = row.get(key, 0.0) + value
             rows.append(row)
         return pd.DataFrame(rows, index=pd.Index(self.months, name="month")).fillna(0.0)
+
+    def cashflow_categories(self) -> Dict[str, str]:
+        """Category of every column of ``cashflow_items`` (for the composition plot)."""
+        cats: Dict[str, str] = {}
+        for cf in self.cashflows:
+            kind = type(cf).__name__
+            if hasattr(cf, "components"):
+                for p in cf.pensions:
+                    cats[f"{p.name} contribution"] = "Pension contributions"
+                    cats[f"{p.name} pension (gross)"] = "Pensions (gross)"
+                cats["Rürup tax refund"] = "Tax refund"
+                cats["Income tax on pensions"] = "Income tax"
+            elif kind == "Salary":
+                cats[kind] = "Salary"
+            elif kind == "Insurance":
+                cats[cf.name] = "Insurances"
+            else:
+                cats[getattr(cf, "name", kind)] = "Living costs"
+        return cats
 
     def policy_grid(self, t: int, state: float = 1.0) -> tuple:
         """

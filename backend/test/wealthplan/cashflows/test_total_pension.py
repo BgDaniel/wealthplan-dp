@@ -45,7 +45,7 @@ class TestRuerupPension(unittest.TestCase):
         plan = RuerupPension(name="R", monthly_contribution_amount=600.0, start_date=dt.date(2026, 1, 1),
                              pension_start=dt.date(2036, 1, 1), expected_return=0.0, running_costs=0.0,
                              acquisition_costs=0.0, pension_factor=30.0)
-        self.assertAlmostEqual(plan.capital_at_pension_start(), 120 * 600.0)
+        self.assertAlmostEqual(plan.capital_at_pension_start(), 120 * 600.0)  # no growth: timing irrelevant
         self.assertAlmostEqual(plan.monthly_payout_brutto, 72_000 / 10_000 * 30.0)
         self.assertEqual(plan.monthly_contribution(dt.date(2036, 1, 1)), 0.0)
 

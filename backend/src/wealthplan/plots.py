@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
@@ -205,6 +206,136 @@ def regression(opt, t) -> Figure:
     return fig
 
 
+def depletion(opt, t) -> Figure:
+    """Probability (among the living) of low wealth and of unpaid fixed costs."""
+    from wealthplan.analysis import depletion_risk
+
+    risk = depletion_risk(opt)
+    ok = risk["alive_paths"].values >= 20
+    fig, ax = plt.subplots(figsize=(11, 4.4))
+    ax.plot(risk["age"][ok], 100.0 * risk["low_wealth"][ok], color=BLUE,
+            label="wealth below 6 months of fixed costs")
+    ax.plot(risk["age"][ok], 100.0 * risk["shortfall"][ok], color=PURPLE, ls="--",
+            label="fixed costs cannot be paid")
+    ax.set(title="Depletion risk (share of the paths alive at that age)", xlabel="Age", ylabel="%")
+    ax.set_ylim(bottom=0)
+    ax.text(0.99, 0.5, "the plan consumes the remaining\nwealth towards its end date", transform=ax.transAxes,
+            ha="right", va="center", color=t["muted"], fontsize=9)
+    _retirement(ax, opt, t)
+    ax.legend(loc="upper left")
+    return fig
+
+
+def taxes(opt, t) -> Figure:
+    """Taxes per year: capital gains tax (fan over paths), income tax on pensions, Rürup refund."""
+    from wealthplan.analysis import yearly_taxes
+
+    det, cap = yearly_taxes(opt)
+    age = det["age"].values
+    fig, ax = plt.subplots(figsize=(11, 4.6))
+    _fan(ax, age, cap, BLUE, "Capital gains tax", outer=False)
+    ax.plot(age, det["income_tax"].values, color=PURPLE, ls="--", label="Income tax on pensions")
+    if det["rurup_refund"].abs().sum() > 0:
+        ax.plot(age, -det["rurup_refund"].values, color=t["muted"], ls=":", lw=1.6,
+                label="Rürup tax refund (negative tax)")
+    ax.axhline(0.0, color=t["muted"], lw=0.8)
+    ax.set(title="Taxes per year", xlabel="Age")
+    _euro(ax)
+    _retirement(ax, opt, t)
+    ax.legend(loc="upper left")
+    return fig
+
+
+def ruerup_vs_etf_plot(opt, t) -> Figure:
+    """Expected cumulative net cash of the Rürup plan vs. an ETF plan with the same net cost."""
+    from wealthplan.analysis import ruerup_vs_etf
+
+    frame, info = ruerup_vs_etf(opt)
+    fig, ax = plt.subplots(figsize=(11, 4.6))
+    ax.set(title="Rürup vs. ETF savings plan (same net cost) – expected cumulative net cash", xlabel="Age")
+    if frame.empty:
+        ax.text(0.5, 0.5, "no Rürup plan configured", transform=ax.transAxes, ha="center", va="center",
+                color=t["muted"])
+        return fig
+    ax.plot(frame["age"], frame["ruerup_cum"], color=PURPLE, label="Rürup (paid while alive)")
+    ax.plot(frame["age"], frame["etf_cum"], color=BLUE, ls="--", label="ETF withdrawals (paid while alive)")
+    ax.plot(frame["age"], frame["etf_cum_with_heirs"], color=BLUE, ls=":", lw=1.4,
+            label="ETF incl. capital left to heirs")
+    ax.axhline(0.0, color=t["muted"], lw=0.8)
+    be = info["break_even_age"]
+    if be is not None:
+        ax.axvline(be, color=t["muted"], lw=1.0, ls="-.")
+        ax.text(be, ax.get_ylim()[0], f" break-even {be:.0f}", color=t["fg"], va="bottom", fontsize=9)
+    text = (f"net cost {info['net_monthly_cost']:,.0f} €/month\n"
+            f"capital at retirement: Rürup {info['ruerup_capital_at_retirement'] / 1e3:,.0f} k€, "
+            f"ETF {info['etf_capital_at_retirement'] / 1e3:,.0f} k€\n"
+            f"Rürup net pension {info['ruerup_net_pension']:,.0f} €/month · "
+            f"ETF withdrawal {info['etf_monthly_withdrawal']:,.0f} €/month")
+    ax.text(0.99, 0.03, text, transform=ax.transAxes, ha="right", va="bottom", fontsize=9, color=t["fg"],
+            bbox=dict(facecolor=t["bg"], edgecolor=t["grid"], boxstyle="round,pad=0.5"))
+    _euro(ax)
+    _retirement(ax, opt, t)
+    ax.legend(loc="upper left")
+    return fig
+
+
+COMPOSITION = (("Salary", BLUE, ""), ("Pensions (gross)", "#5b8ef0", ""), ("Tax refund", "#9bbaf7", ""),
+               ("Living costs", PURPLE, ""), ("Insurances", "#c3a8f3", "//"),
+               ("Pension contributions", "#7d55cf", ""), ("Income tax", "#5b3aa6", "xx"))
+
+
+def composition(opt, t) -> Figure:
+    """Deterministic cashflows by category, yearly average per month (income +, outflows −)."""
+    items = opt.cashflow_items()
+    cats = opt.cashflow_categories()
+    grouped = items.T.groupby(lambda c: cats.get(c, "Living costs")).sum().T
+    years = np.array([m.year for m in opt.months])
+    yearly = grouped.groupby(years).mean()
+    age = np.array([opt.age_grid[np.argmax(years == y)] for y in yearly.index])
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    pos_base = np.zeros(len(yearly))
+    neg_base = np.zeros(len(yearly))
+    for name, color, hatch in COMPOSITION:
+        if name not in yearly or not yearly[name].abs().sum():
+            continue
+        v = yearly[name].values
+        base = np.where(v >= 0, pos_base, neg_base)
+        ax.fill_between(age, base, base + v, step="post", color=color, hatch=hatch or None, edgecolor=t["bg"],
+                        lw=0.4, label=name)
+        pos_base = np.where(v >= 0, pos_base + v, pos_base)
+        neg_base = np.where(v < 0, neg_base + v, neg_base)
+    ax.step(age, yearly.sum(axis=1).values, where="post", color=t["fg"], lw=1.4, label="net cashflow")
+    ax.axhline(0.0, color=t["muted"], lw=0.8)
+    ax.set(title="Cashflow composition (average per month of each year)", xlabel="Age")
+    _euro(ax)
+    _retirement(ax, opt, t)
+    ax.legend(loc="lower left", ncol=4, fontsize=8.5)
+    return fig
+
+
+COMPARE_STYLES = ((BLUE, "-"), (PURPLE, "--"), ("#8fb3f5", ":"), ("#cdb6f7", "-."))
+
+
+def compare_runs(frames: List[pd.DataFrame], labels: List[str], column: str, title: str, unit: str,
+                 theme: str = "dark") -> Figure:
+    """Median curves of several runs (quantiles.csv frames) in one chart; at most 4 runs."""
+    with plt.rc_context():
+        _style(theme)
+        fig, ax = plt.subplots(figsize=(11, 4.6))
+        for (color, ls), frame, label in zip(COMPARE_STYLES, frames, labels):
+            scale = 100.0 if unit == "%" else 1.0
+            ax.plot(frame["age"], scale * frame[column], color=color, ls=ls, label=label)
+        ax.set(title=title, xlabel="Age")
+        if unit == "%":
+            ax.set_ylabel("%")
+            ax.set_ylim(-2, 102)
+        else:
+            _euro(ax)
+        ax.legend(loc="best")
+        fig.tight_layout()
+    return fig
+
+
 FIGURES: Dict[str, Tuple[str, Callable]] = {
     "01_wealth": ("Wealth", wealth),
     "02_consumption": ("Consumption", consumption),
@@ -215,6 +346,10 @@ FIGURES: Dict[str, Tuple[str, Callable]] = {
     "07_equity_policy": ("Equity policy", equity_policy),
     "08_survival": ("Survival", survival),
     "09_regression": ("Regression R²", regression),
+    "10_depletion": ("Depletion risk", depletion),
+    "11_taxes": ("Taxes", taxes),
+    "12_ruerup_vs_etf": ("Rürup vs. ETF", ruerup_vs_etf_plot),
+    "13_composition": ("Cashflow composition", composition),
 }
 
 

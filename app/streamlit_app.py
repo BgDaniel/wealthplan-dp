@@ -11,6 +11,7 @@ Pages
 * Runs: pick a stored configuration, optionally override the simulation sizes, start now or
   schedule a start time. Runs compute in background processes (wealthplan.jobs); the table
   shows all runs with progress, remaining time, key figures and a link to the result.
+* Compare: median curves and key figures of up to four runs side by side (sensitivity).
 * Result: key figures, figures (dark theme), runtimes, parameters, downloads of one run.
 * Configurations: the YAML parameter files in params/ as forms: add, edit, copy, delete.
 * Cache: size of the regression cache, clear it.
@@ -46,7 +47,7 @@ from wealthplan.catalog import DEFAULT_PARAMS_DIR, delete_config, list_configs, 
 from wealthplan.jobs import (DEFAULT_JOBS_ROOT, cancel_job, delete_job, list_jobs, read_status,  # noqa: E402
                              submit_job)
 from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import decide  # noqa: E402
-from wealthplan.plots import BLUE, PURPLE, THEMES  # noqa: E402
+from wealthplan.plots import BLUE, PURPLE, THEMES, compare_runs  # noqa: E402
 
 PARAMS_DIR = ROOT / DEFAULT_PARAMS_DIR
 JOBS_ROOT = ROOT / DEFAULT_JOBS_ROOT
@@ -64,6 +65,10 @@ FIGURE_TITLES = {
     "07_equity_policy": "Equity policy",
     "08_survival": "Survival",
     "09_regression": "Regression R²",
+    "10_depletion": "Depletion risk",
+    "11_taxes": "Taxes",
+    "12_ruerup_vs_etf": "Rürup vs. ETF",
+    "13_composition": "Cashflow composition",
 }
 
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
@@ -250,6 +255,82 @@ def runs_page() -> None:
     _new_run()
     _runs_table()
     _manage_runs()
+
+
+# ------------------------------------------------------------------ page: compare
+
+COMPARE_METRICS = {
+    "wealth_p50": ("Wealth (median)", "€"),
+    "consumption_p50": ("Consumption (median)", "€"),
+    "equity_share_p50": ("Equity share (median)", "%"),
+    "equity_amount_p50": ("Amount in equity (median)", "€"),
+    "wealth_p05": ("Wealth (5 % quantile)", "€"),
+}
+COMPARE_KEYS = ["equity_share_start", "equity_share_retirement", "consumption_start", "consumption_retired_median",
+                "wealth_retirement_median", "wealth_retirement_p05", "prob_shortfall", "value_oos"]
+
+
+def _flatten(data: Any, prefix: str = "") -> dict[str, Any]:
+    if isinstance(data, dict):
+        out: dict[str, Any] = {}
+        for k, v in data.items():
+            out.update(_flatten(v, f"{prefix}{k}."))
+        return out
+    return {prefix[:-1]: json.dumps(data, default=str) if isinstance(data, list) else data}
+
+
+def compare_page() -> None:
+    """Median curves, key figures and differing parameters of several runs."""
+    done = [j for j in list_jobs(JOBS_ROOT) if j["state"] == "done"]
+    _header("Optimisation", "Compare", "Sensitivity: put up to four finished runs side by side, e.g. the same "
+            "plan with different risk aversion γ, equity return or Rürup contribution.")
+    if len(done) < 2:
+        st.info("At least two finished runs are needed – schedule variants on the Runs page.")
+        return
+    labels = {j["id"]: f"{j['name']} · {j['id']}" for j in done}
+    chosen = st.multiselect("Runs (max. 4)", list(labels), default=list(labels)[:2], format_func=labels.get,
+                            max_selections=4)
+    if len(chosen) < 2:
+        st.caption("Select at least two runs.")
+        return
+    dirs = [Path(read_status(JOBS_ROOT / c)["run_dir"]) for c in chosen]
+    params = [_flatten(yaml.safe_load((d / "params.yaml").read_text(encoding="utf-8"))) for d in dirs]
+    keys = sorted(set().union(*params))
+    diff = [k for k in keys if len({str(p.get(k)) for p in params}) > 1
+            and not k.endswith("run_config_id")]
+    names = [f"#{i + 1} {labels[c].split(' · ')[0]}" for i, c in enumerate(chosen)]
+    if diff:
+        short = {k: k.split(".")[-1] for k in diff}
+        names = [f"#{i + 1} " + ", ".join(f"{short[k]}={p.get(k)}" for k in diff[:3]) for i, p in enumerate(params)]
+    metric = st.radio("Curve", list(COMPARE_METRICS), horizontal=True,
+                      format_func=lambda k: COMPARE_METRICS[k][0])
+    frames = [pd.read_csv(d / "quantiles.csv", index_col=0) for d in dirs]
+    title, unit = COMPARE_METRICS[metric]
+    st.pyplot(compare_runs(frames, names, metric, title, unit), width="stretch")
+
+    left, right = st.columns([1.2, 1], gap="large")
+    with left:
+        st.subheader("Key figures")
+        summaries = [json.loads((d / "summary.json").read_text()) for d in dirs]
+        def fmt(key: str, v: Any) -> str:
+            if v is None or v != v:
+                return "–"
+            if key.startswith(("equity_share", "prob_")):
+                return _pct(v)
+            if key.startswith(("consumption", "wealth")):
+                return _eur(v)
+            return f"{v:.5f}"
+
+        table = pd.DataFrame({n: [fmt(k, s.get(k)) for k in COMPARE_KEYS] for n, s in zip(names, summaries)},
+                             index=COMPARE_KEYS)
+        st.dataframe(table, width="stretch")
+    with right:
+        st.subheader("Differing parameters")
+        if diff:
+            st.dataframe(pd.DataFrame({n: [p.get(k) for k in diff] for n, p in zip(names, params)},
+                                      index=diff).astype(str), width="stretch")
+        else:
+            st.caption("The runs have identical parameters.")
 
 
 # ------------------------------------------------------------------ page: result
@@ -755,6 +836,7 @@ def main() -> None:
             st.Page(steering_page, title="Steering", icon=":material/explore:", url_path="steering"),
             st.Page(runs_page, title="Runs", icon=":material/play_circle:", url_path="runs", default=True),
             st.Page(result_page, title="Result", icon=":material/insights:", url_path="result"),
+            st.Page(compare_page, title="Compare", icon=":material/compare_arrows:", url_path="compare"),
         ],
         "Master data": [
             st.Page(configurations_page, title="Configurations", icon=":material/tune:", url_path="configurations"),

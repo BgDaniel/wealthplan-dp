@@ -23,8 +23,11 @@ poetry run streamlit run app/streamlit_app.py
 * **Runs**: pick a configuration, adjust the number of paths, start now or at a scheduled
   time. Runs compute in background processes (`results/_jobs/`), at most *n* in parallel;
   the table shows progress, remaining time and key figures.
-* **Result**: key figures, figures (wealth, consumption, equity share, equity amount,
-  saving/withdrawal, equity policy map, survival, regression R²), runtimes, downloads.
+* **Result**: key figures, figures (wealth, consumption, equity share, equity vs. savings
+  holdings, monthly buy/sell per asset, saving/withdrawal, equity policy map, survival,
+  regression R², depletion risk, taxes per year, Rürup vs. ETF plan, cashflow composition),
+  runtimes, downloads.
+* **Compare**: median curves, key figures and differing parameters of up to four runs.
 * **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete), incl.
   Rürup plans and the tax parameters.
   Saving from the app rewrites the file without comments.
@@ -108,6 +111,13 @@ Constant (or growing) monthly contribution until retirement; each contribution m
 acquisition costs is invested at the expected fund return minus the running costs
 (deterministic); monthly pension = capital / 10 000 × pension factor (Rentenfaktor), lifelong,
 no death benefit.
+
+## Rürup vs. ETF (figure 12, `wealthplan.analysis.ruerup_vs_etf`)
+
+Same net cost per month (contribution minus tax refund) into an ETF (equity return minus TER,
+taxed as in the model); from retirement a level withdrawal that empties the ETF at the plan
+end, against the Rürup pension net of the additional income tax it causes. Flows weighted with
+the survival probability; the ETF capital left at death is shown separately (heirs).
 
 ## Layout
 
