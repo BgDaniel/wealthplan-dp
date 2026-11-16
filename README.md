@@ -71,6 +71,12 @@ share; the consumption is solved in closed form on each grid segment
 (u'(c) = β · slope of the continuation value). The forward simulation re-evaluates the
 regression on fresh **out-of-sample** paths with simulated death times.
 
+**Wealth grid.** `technical.grid_type: log` (default) uses the shifted logarithmic grid
+w_j = s·((w_max/s + 1)^(j/(n−1)) − 1) with `grid_shift` s (10,000 €): roughly linear below s,
+constant relative spacing above (≈ 1.5 % with 400 points up to 3 Mio. €). It fits the
+multiplicative GBM returns and the CRRA value function, which is strongly curved at low wealth.
+`quadratic` (w_max·(j/(n−1))²) is the former grid: finer at the top, coarser at low wealth.
+
 **Regression degree / state.** The regression state is the fund-linked Rürup capital
 (before) or Rürup pension (after the pension start) of the path; without such a plan the equity
 level. Default: degree 0 (constant basis = Monte Carlo mean), i.e. the policy does not condition

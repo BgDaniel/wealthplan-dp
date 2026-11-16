@@ -194,7 +194,7 @@ def _config_facts(data: dict[str, Any]) -> str:
             f'<b>{sim["retirement_date"]}</b><br>wealth <b>{_keur(sim["initial_wealth"])}</b> · age '
             f'<b>{sim.get("current_age", "–")}</b> · γ <b>{gamma:g}</b><br>equity <b>{100 * sto["yearly_return"]:.1f} %</b>'
             f' ± <b>{100 * sto["sigma"]:.0f} %</b> · savings <b>{100 * sim["yearly_return_savings"]:.1f} %</b><br>'
-            f'<b>{tech["n_wealth"]}</b> wealth points · <b>{tech["n_equity_shares"]}</b> equity shares · '
+            f'<b>{tech["n_wealth"]}</b> wealth points ({tech.get("grid_type", "log")}) · <b>{tech["n_equity_shares"]}</b> equity shares · '
             f'degree <b>{tech["regression_degree"]}</b></div>')
 
 
@@ -1062,6 +1062,12 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             w_max = _money_input(c1, "Wealth grid max [€]", float(tech["w_max"]))
             n_wealth = c2.number_input("Wealth grid points", value=int(tech["n_wealth"]), min_value=20,
                                        max_value=2000)
+            grid_type = c3.selectbox("Wealth grid spacing", ["log", "quadratic"],
+                                     index=0 if tech.get("grid_type", "log") == "log" else 1,
+                                     help="log: constant relative spacing above the shift (fits the "
+                                          "multiplicative GBM returns); quadratic: w_max·(j/n)²")
+            grid_shift = _money_input(c4, "Log grid shift [€]", float(tech.get("grid_shift", 10_000.0)),
+                                      help="below this wealth the log grid is roughly linear")
             n_shares = c3.number_input("Equity share points", value=int(tech["n_equity_shares"]), min_value=2,
                                        max_value=101)
             max_share = c4.number_input("Max equity share", value=float(tech["max_equity_share"]), min_value=0.0,
@@ -1125,7 +1131,8 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                             "tax_brackets_indexed": bool(brackets_indexed)}
         new["reserve"] = {"enabled": bool(reserve_on), "months_of_fixed_costs": reserve_months}
         new["trading"] = {"buy_cost": buy_cost / 100.0, "sell_cost": sell_cost / 100.0}
-        new["technical"] = {"w_max": w_max, "n_wealth": int(n_wealth), "n_equity_shares": int(n_shares),
+        new["technical"] = {"w_max": w_max, "n_wealth": int(n_wealth), "grid_type": grid_type,
+                            "grid_shift": grid_shift, "n_equity_shares": int(n_shares),
                             "max_equity_share": max_share, "regression_degree": int(degree),
                             "shortfall_penalty": penalty, "apply_terminal_penalty": bool(terminal),
                             "use_cache": bool(use_cache)}

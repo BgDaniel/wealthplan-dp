@@ -101,9 +101,10 @@ def _consumption_check(name: str, formula: str, data: Dict[str, Any], gross_mont
     growth = (beta * gross) ** (1.0 / gamma)
     c0 = _closed_form_c0(opt.initial_wealth, np.full(n, income), gross, growth)
     cons = np.nanmedian(opt.opt_consumption.values, axis=1)
-    # average growth over the horizon (single months jitter by the grid: the continuation value is
-    # linear between grid points, its slope piecewise constant)
-    mean_growth = float((cons[n - 2] / cons[0]) ** (1.0 / (n - 2)))
+    # average growth over the horizon: log-linear least-squares fit over all months but the last
+    # (single months jitter by the grid: the continuation value is linear between grid points,
+    # its slope piecewise constant; a ratio of two single months would pick up that jitter)
+    mean_growth = float(np.exp(np.polyfit(np.arange(n - 1), np.log(cons[:n - 1]), 1)[0]))
     return [
         _result(f"{name}: c_0", formula, c0, cons[0], 0.003),
         _result(f"{name}: mean growth", "g = (β R)^(1/γ)", growth[0], mean_growth, 1e-4),

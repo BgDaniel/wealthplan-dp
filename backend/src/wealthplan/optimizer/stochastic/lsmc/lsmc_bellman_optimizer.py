@@ -114,6 +114,30 @@ def project_realised_values(grid: np.ndarray, v_next: np.ndarray, gross: np.ndar
     return proj, sum_y, sum_y2
 
 
+def make_wealth_grid(w_max: float, n: int, grid_type: str = "log", shift: float = 10_000.0) -> np.ndarray:
+    """
+    Wealth grid on [0, w_max] with n points, ascending, starting at 0.
+
+    * ``log`` (default): shifted logarithmic grid w_j = s((w_max/s + 1)^(j/(n-1)) - 1), roughly
+      linear below the shift s and of constant relative spacing above it. Matches the
+      multiplicative GBM returns and the CRRA value function, which is strongly curved at low
+      wealth and almost linear at high wealth.
+    * ``quadratic``: w_j = w_max (j/(n-1))^2.
+    """
+    if n < 2 or w_max <= 0.0:
+        raise ValueError("need n >= 2 and w_max > 0")
+    u = np.linspace(0.0, 1.0, n)
+    if grid_type == "quadratic":
+        return w_max * u ** 2
+    if grid_type == "log":
+        if shift <= 0.0:
+            raise ValueError("grid_shift must be > 0")
+        grid = shift * ((w_max / shift + 1.0) ** u - 1.0)
+        grid[0], grid[-1] = 0.0, w_max
+        return grid
+    raise ValueError(f"unknown grid_type {grid_type!r} (log or quadratic)")
+
+
 @nb.njit(cache=True)
 def _max_share(x: float, reserve: float) -> float:
     """Largest equity share that keeps at least ``reserve`` in the savings account."""
@@ -657,6 +681,8 @@ class LSMCBellmanOptimizer:
         w_max: float,
         n_wealth: int,
         n_equity_shares: int,
+        grid_type: str = "log",
+        grid_shift: float = 10_000.0,
         max_equity_share: float = 1.0,
         regression_degree: int = 0,
         shortfall_penalty: float = 1.0,
@@ -705,6 +731,9 @@ class LSMCBellmanOptimizer:
             Seed of the regression paths (overrides the GBM seed if given).
         w_max, n_wealth : float, int
             Wealth grid [0, w_max] with n_wealth points, denser at low wealth.
+        grid_type, grid_shift : str, float
+            Grid spacing: "log" (shifted logarithmic, shift in euros) or "quadratic"
+            (``make_wealth_grid``).
         n_equity_shares, max_equity_share : int, float
             Equity share grid: n_equity_shares points in [0, max_equity_share].
         regression_degree : int
@@ -801,7 +830,7 @@ class LSMCBellmanOptimizer:
         avg = np.array([self.fixed_costs[t:t + 12].mean() for t in range(self.n_months)])
         self.reserve = reserve_months * avg
 
-        self.wealth_grid = w_max * np.linspace(0.0, 1.0, n_wealth) ** 2
+        self.wealth_grid = make_wealth_grid(w_max, n_wealth, grid_type, grid_shift)
         self.equity_shares = np.linspace(0.0, max_equity_share, n_equity_shares)
 
         # Cache folder keyed by the parameter hash only (not the run name): identical parameters

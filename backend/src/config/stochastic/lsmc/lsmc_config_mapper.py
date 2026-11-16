@@ -14,6 +14,8 @@ from result_cache.result_cache import params_hash
 KEY_W_MAX: str = "w_max"
 KEY_N_WEALTH: str = "n_wealth"
 KEY_N_EQUITY_SHARES: str = "n_equity_shares"
+KEY_GRID_TYPE: str = "grid_type"
+KEY_GRID_SHIFT: str = "grid_shift"
 KEY_MAX_EQUITY_SHARE: str = "max_equity_share"
 KEY_REGRESSION_DEGREE: str = "regression_degree"
 KEY_SHORTFALL_PENALTY: str = "shortfall_penalty"
@@ -21,11 +23,13 @@ KEY_APPLY_TERMINAL_PENALTY: str = "apply_terminal_penalty"
 KEY_PARAMS_HASH: str = "params_hash"
 
 # Part of the cache key: bump whenever the backward induction changes its results.
-SOLVER_VERSION: str = "lsmc-10"
+SOLVER_VERSION: str = "lsmc-11"
 
 TECHNICAL_DEFAULTS: Dict[str, Any] = {
     KEY_W_MAX: 3_000_000.0,
     KEY_N_WEALTH: 400,
+    KEY_GRID_TYPE: "log",
+    KEY_GRID_SHIFT: 10_000.0,
     KEY_N_EQUITY_SHARES: 11,
     KEY_MAX_EQUITY_SHARE: 1.0,
     KEY_REGRESSION_DEGREE: 0,
@@ -48,7 +52,9 @@ def solver_params_hash(data: Dict[str, Any]) -> str:
     stochastic = relevant.get(KEY_STOCHASTIC, {})
     stochastic.pop(KEY_N_SIMS_OOS, None)
     stochastic.get(KEY_SURVIVAL_MODEL, {}).pop(KEY_SURVIVAL_SEED, None)
-    relevant.get(KEY_TECHNICAL, {}).pop(KEY_USE_CACHE, None)
+    # technical defaults included, so a changed default is a different key
+    relevant[KEY_TECHNICAL] = {**TECHNICAL_DEFAULTS, **(relevant.get(KEY_TECHNICAL) or {})}
+    relevant[KEY_TECHNICAL].pop(KEY_USE_CACHE, None)
     relevant["solver_version"] = SOLVER_VERSION
     return params_hash(relevant)
 
