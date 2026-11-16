@@ -98,12 +98,17 @@ class TaxModel:
         soli = 0.0 if tax <= 19_950 else min(0.055 * tax, 0.119 * (tax - 19_950))
         return tax + soli
 
-    def pension_income_tax_monthly(self, taxable_monthly: float) -> float:
-        """Income tax per month on the monthly taxable pension income."""
-        taxable_yearly = max(12.0 * taxable_monthly - self.pension_allowance_yearly, 0.0)
+    def pension_income_tax_monthly(self, taxable_monthly: float, scale: float = 1.0) -> float:
+        """
+        Income tax per month on the (nominal) monthly taxable pension income.
+
+        ``scale`` > 1 indexes the tariff brackets and the allowance with inflation:
+        tax = scale * tariff(income / scale).
+        """
+        taxable_yearly = max(12.0 * taxable_monthly - scale * self.pension_allowance_yearly, 0.0)
         if self.income_tax_mode == "flat":
             return self.income_tax_rate_retirement * taxable_yearly / 12.0
-        return self.tariff_2025(taxable_yearly) / 12.0
+        return scale * self.tariff_2025(taxable_yearly / scale) / 12.0
 
     @staticmethod
     def taxable_share_basis_pension(start_year: int) -> float:
@@ -120,7 +125,7 @@ class TaxModel:
             return 0.80 + 0.01 * (start_year - 2020)
         return min(1.0, 0.825 + 0.005 * (start_year - 2023))
 
-    def basis_pension_refund_monthly(self, contribution_monthly: float) -> float:
+    def basis_pension_refund_monthly(self, contribution_monthly: float, scale: float = 1.0) -> float:
         """Tax refund per month for Basisrente contributions (100 % deductible since 2023)."""
-        deductible_yearly = min(12.0 * contribution_monthly, self.basis_pension_deduction_room)
+        deductible_yearly = min(12.0 * contribution_monthly, scale * self.basis_pension_deduction_room)
         return self.marginal_tax_rate_working * deductible_yearly / 12.0

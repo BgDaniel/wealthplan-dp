@@ -105,6 +105,30 @@ only redo the forward simulation.
 * Not modelled: health / long-term care insurance of pensioners, church tax (add it to the
   capital gains rate), Vorabpauschale.
 
+## Inflation (YAML section `inflation`, `wealthplan.economy.inflation`)
+
+All amounts of the configuration are in euros of the start date. With `rate` > 0 the salary
+grows with inflation plus `salary_real_growth`, fixed expenses with inflation
+(`expenses_indexed`), the public pension with `public_pension_indexation`; Rürup and private
+pensions stay nominal (they lose real value). The optimizer works in **real euros of the start
+date**: cashflows are divided by the price index, returns by the monthly inflation factor.
+Taxes apply to nominal amounts (capital gains tax also on the inflation part of the return);
+tariff brackets, allowances and the Basisvorsorge room grow with inflation if
+`tax_brackets_indexed`. Results and figures are in real euros; the Steering page shows nominal
+euros of the chosen month.
+
+## Mortality (`stochastic.survival_model`)
+
+`table`: `destatis_unisex` / `destatis_male` / `destatis_female` – Gompertz fits to the remaining
+life expectancy at 40 and 65 of the Destatis period life table 2021/23 – or `custom` (b, c).
+`age_shift` (years) moves the hazard: −3 ≈ cohort adjustment of the period table.
+
+## Emergency reserve (YAML section `reserve`)
+
+With `enabled`, at least `months_of_fixed_costs` × the month's fixed costs stay in the savings
+account: the equity share is limited to 1 − reserve / invested amount (backward induction,
+simulation and Steering page).
+
 ## Rürup (`ruerup_plans` under `total_pension`)
 
 Constant (or growing) monthly contribution until retirement; each contribution minus the

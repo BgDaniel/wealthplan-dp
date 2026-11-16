@@ -40,7 +40,9 @@ class TestAnalysis(unittest.TestCase):
         tax = self.opt.opt_capital_tax.values[0, 0]
         if eq in (0.0, 1.0):
             rate = self.opt.equity_tax_rate if eq == 1.0 else self.opt.savings_tax_rate
-            self.assertAlmostEqual(tax, (after - x + tax) * rate, delta=1e-6 * max(1.0, abs(tax)))
+            phi = self.opt.inflation_factor  # amounts are real: nominal = real * phi
+            gain_nominal = after * phi - x + tax * phi
+            self.assertAlmostEqual(tax * phi, gain_nominal * rate, delta=1e-6 * max(1.0, abs(tax)))
 
     def test_ruerup_vs_etf_without_costs_and_taxes(self) -> None:
         """No costs, no taxes, same return: both capitals at retirement are equal."""
@@ -58,6 +60,47 @@ class TestAnalysis(unittest.TestCase):
         items = self.opt.cashflow_items()
         cats = self.opt.cashflow_categories()
         self.assertTrue(set(items.columns) <= set(cats))
+
+
+class TestInflationReserveMortality(unittest.TestCase):
+    """Real-terms conversion, emergency reserve, mortality presets."""
+
+    def test_real_returns_and_cashflows(self) -> None:
+        data = small_params()
+        data["inflation"] = {"rate": 0.03, "expenses_indexed": True, "public_pension_indexation": 0.03}
+        data["tax"] = {"tax_savings_interest": False}
+        data["simulation_parameters"]["yearly_return_savings"] = 0.03
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
+        self.assertAlmostEqual(opt.rf, 1.0, places=12)  # savings rate = inflation, no tax: real return 0
+        # rent grows with inflation once a year -> constant in real terms up to the intra-year drift
+        rent = opt.cashflow_items()["Rent"].values / opt.price_index
+        self.assertAlmostEqual(rent[12], rent[0], delta=0.03 * abs(rent[0]))
+        nominal = opt.cashflow_items()["Rent"].values
+        self.assertAlmostEqual(nominal[24] / nominal[0], 1.03 ** 2, places=10)
+
+    def test_reserve_stays_in_savings(self) -> None:
+        data = small_params()
+        data["reserve"] = {"enabled": True, "months_of_fixed_costs": 6}
+        data["stochastic"]["yearly_return"] = 0.12  # equity very attractive: without reserve 100 %
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
+        opt.solve()
+        savings = (1.0 - opt.opt_equity_share.values) * opt.opt_invested.values
+        x = opt.opt_invested.values
+        need = np.minimum(opt.reserve[:, None], x)
+        ok = np.isfinite(x)
+        ok[-1] = False  # last month: everything consumed
+        self.assertTrue(np.all(savings[ok] >= need[ok] - 1e-6 * np.maximum(need[ok], 1.0)))
+        self.assertGreater(float(np.nanmax(savings[:-1])), 0.0)
+
+    def test_mortality_presets(self) -> None:
+        from config.stochastic.stochastic_config_mapper import survival_parameters
+
+        b, c = survival_parameters({"table": "destatis_male"})
+        b3, c3 = survival_parameters({"table": "destatis_male", "age_shift": -3})
+        self.assertEqual(c, c3)
+        self.assertAlmostEqual(b3, b * np.exp(-3 * c))
+        with self.assertRaises(ValueError):
+            survival_parameters({"table": "unknown"})
 
 
 if __name__ == "__main__":

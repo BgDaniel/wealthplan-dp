@@ -114,20 +114,35 @@ def project_realised_values(grid: np.ndarray, v_next: np.ndarray, gross: np.ndar
     return proj, sum_y, sum_y2
 
 
+@nb.njit(cache=True)
+def _max_share(x: float, reserve: float) -> float:
+    """Largest equity share that keeps at least ``reserve`` in the savings account."""
+    if reserve <= 0.0:
+        return 1.0
+    if x <= reserve:
+        return 0.0
+    return 1.0 - reserve / x
+
+
 @nb.njit(parallel=True, cache=True)
-def best_continuation(q: np.ndarray, proj: np.ndarray) -> np.ndarray:
+def best_continuation(q: np.ndarray, proj: np.ndarray, grid: np.ndarray, shares: np.ndarray,
+                      reserve: float) -> np.ndarray:
     """
-    Fitted continuation value per path and grid point, maximised over the equity shares.
+    Fitted continuation value per path and grid point, maximised over the admissible equity
+    shares (those keeping the emergency reserve in the savings account; 0 % is always allowed).
 
     Parameters
     ----------
     q : np.ndarray, shape (n_sims, D)
     proj : np.ndarray, shape (D, n_w, n_a)
+    grid, shares : wealth grid (n_w,) and equity share grid (n_a,)
+    reserve : float
+        Minimum amount in the savings account (0: no constraint).
 
     Returns
     -------
     np.ndarray, shape (n_sims, n_w)
-        max_k sum_b q[s, b] * proj[b, j, k].
+        max_k sum_b q[s, b] * proj[b, j, k] over admissible k.
     """
     n_sims, d = q.shape
     _, n_w, n_a = proj.shape
@@ -135,7 +150,10 @@ def best_continuation(q: np.ndarray, proj: np.ndarray) -> np.ndarray:
     for s in nb.prange(n_sims):
         for j in range(n_w):
             best = -np.inf
+            cap = _max_share(grid[j], reserve) + 1e-12
             for k in range(n_a):
+                if k > 0 and shares[k] > cap:
+                    continue
                 v = 0.0
                 for b in range(d):
                     v += q[s, b] * proj[b, j, k]
@@ -242,19 +260,23 @@ def bellman_values(grid: np.ndarray, cont: np.ndarray, y: float, beta: float, ga
 
 @nb.njit(cache=True)
 def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, shares: np.ndarray, beta: float,
-            gamma: float, epsilon: float, h: np.ndarray, best_share: np.ndarray):
+            gamma: float, epsilon: float, h: np.ndarray, best_share: np.ndarray, reserve: float):
     """
     Optimal invested amount x and equity share for resources m > 0 at one market state.
 
     The regressed continuation value (coef: (D, n_w, n_a), basis values phi) is maximised over
     the equity shares per grid point; the consumption follows from ``_optimal_investment``,
     the equity share is interpolated between the neighbouring grid points of x.
-    h and best_share are work arrays of length n_w.
+    h and best_share are work arrays of length n_w. Equity shares that would leave less than
+    ``reserve`` in the savings account are not admissible.
     """
     n_w, n_a, d_max = grid.shape[0], shares.shape[0], phi.shape[0]
     for j in range(n_w):
         vmax, kbest = -np.inf, 0
+        cap = _max_share(grid[j], reserve) + 1e-12
         for k in range(n_a):
+            if k > 0 and shares[k] > cap:
+                continue
             v = 0.0
             for i in range(d_max):
                 v += phi[i] * coef[i, j, k]
@@ -271,20 +293,21 @@ def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, share
         alpha = best_share[l - 1] + wl * (best_share[l] - best_share[l - 1])
     else:
         alpha = best_share[l]
-    return x, alpha
+    return x, min(alpha, _max_share(x, reserve))
 
 
 @nb.njit(parallel=True, cache=True)
 def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds: np.ndarray, degrees: np.ndarray,
                   shares: np.ndarray, cashflows: np.ndarray, equity: np.ndarray, alive: np.ndarray, w0: float,
                   equity0: float, rf: float, equity_tax: float, savings_tax: float, beta: float, gamma: float,
-                  epsilon: float, terminal_consume: bool):
+                  epsilon: float, terminal_consume: bool, deflator: float, reserve: np.ndarray):
     """
     Simulate the optimal policy on out-of-sample paths.
 
     At every month the regressed continuation value is evaluated at the path's market state
-    (``_decide``). Holdings are tracked per asset: the equity holding grows with the equity
-    return after tax 1 + (R - 1)(1 - equity_tax), the savings holding with rf (after tax).
+    (``_decide``). Holdings are tracked per asset in real euros: the equity holding grows with
+    the nominal equity return after tax 1 + (R - 1)(1 - equity_tax), the savings holding with
+    rf (nominal, after tax); both are deflated by ``deflator`` = 1 / monthly inflation factor.
 
     Returns
     -------
@@ -332,16 +355,16 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
             z = (np.log(equity[p, t]) - means[t]) / stds[t] if stds[t] > 0.0 else 0.0
             for i in range(d_max):
                 phi[i] = z ** i if i <= degrees[t] else 0.0
-            x, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share)
+            x, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share, reserve[t])
             cons[t, p] = m - x
             invested[t, p] = x
             share[t, p] = alpha
             r = equity[p, t + 1] / equity[p, t]
-            eq_hold = alpha * x * (1.0 + (r - 1.0) * (1.0 - equity_tax))
-            sav_hold = (1.0 - alpha) * x * rf
+            eq_hold = alpha * x * (1.0 + (r - 1.0) * (1.0 - equity_tax)) * deflator
+            sav_hold = (1.0 - alpha) * x * rf * deflator
             # rf is after tax: pre-tax interest = after-tax interest / (1 - savings_tax)
-            cap_tax[t, p] = alpha * x * (r - 1.0) * equity_tax + (1.0 - alpha) * x * (rf - 1.0) * savings_tax / (
-                1.0 - savings_tax)
+            cap_tax[t, p] = deflator * (alpha * x * (r - 1.0) * equity_tax + (1.0 - alpha) * x * (rf - 1.0)
+                                        * savings_tax / (1.0 - savings_tax))
     return wealth, cons, share, invested, eq_before, sav_before, cap_tax
 
 
@@ -356,7 +379,8 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: f
     t : int
         Month index.
     wealth : float
-        Liquid wealth at the start of the month (equity + savings).
+        Liquid wealth at the start of the month (equity + savings), in real euros of the start
+        date (divide nominal amounts by ``policy["price_index"][t]``).
     equity_level : float
         Equity level S_t / S_0 (only matters for a regression degree > 0).
 
@@ -382,7 +406,7 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: f
         grid = policy["wealth_grid"]
         x, alpha = _decide(m, grid, policy["coeffs"][t], phi, policy["equity_shares"], float(policy["beta"]),
                            float(policy["gamma"]), float(policy["epsilon"]), np.empty(grid.size),
-                           np.empty(grid.size))
+                           np.empty(grid.size), float(policy["reserve"][t]))
         out.update(consumption=m - x, invested=x, equity_share=alpha)
     out["equity"] = out["equity_share"] * out["invested"]
     out["savings"] = out["invested"] - out["equity"]
@@ -424,6 +448,8 @@ class LSMCBellmanOptimizer:
         savings_tax_rate: float = 0.0,
         equity_tax_rate: float = 0.0,
         initial_equity: float = 0.0,
+        inflation_rate: float = 0.0,
+        reserve_months: float = 0.0,
         use_cache: bool = True,
         params_hash: str = "",
         cache_root: Optional[str] = None,
@@ -476,6 +502,13 @@ class LSMCBellmanOptimizer:
             charged when the return accrues (``TaxModel``).
         initial_equity : float
             Part of the initial wealth currently held in equity (forward simulation only).
+        inflation_rate : float
+            Yearly inflation. The optimizer works in real euros of the start date: cashflows
+            are deflated by the price index, returns by the monthly inflation factor; taxes
+            apply to the nominal returns.
+        reserve_months : float
+            Emergency reserve: at least this many months of (real) fixed costs stay in the
+            savings account (0: no reserve).
         use_cache : bool
             Cache the regression coefficients per month (ResultCache).
         params_hash : str
@@ -518,8 +551,18 @@ class LSMCBellmanOptimizer:
         self.savings_tax_rate = savings_tax_rate
         self.equity_tax_rate = equity_tax_rate
         self.initial_equity = float(initial_equity)
-        # savings gross return after tax on the interest
-        self.rf = 1.0 + ((1.0 + yearly_return_savings) ** self.dt - 1.0) * (1.0 - savings_tax_rate)
+        # savings gross return after tax on the (nominal) interest; real: divided by inflation
+        self.inflation_rate = inflation_rate
+        self.inflation_factor = (1.0 + inflation_rate) ** self.dt
+        self.rf_nominal = 1.0 + ((1.0 + yearly_return_savings) ** self.dt - 1.0) * (1.0 - savings_tax_rate)
+        self.rf = self.rf_nominal / self.inflation_factor
+        self.price_index = self.inflation_factor ** np.arange(self.n_months)
+        self.cf_nominal = self.cf
+        self.cf = self.cf_nominal / self.price_index
+        items = self.cashflow_items().values / self.price_index[:, None]
+        self.fixed_costs = -np.where(items < 0.0, items, 0.0).sum(axis=1)  # real
+        self.reserve_months = reserve_months
+        self.reserve = reserve_months * self.fixed_costs
 
         self.wealth_grid = w_max * np.linspace(0.0, 1.0, n_wealth) ** 2
         self.equity_shares = np.linspace(0.0, max_equity_share, n_equity_shares)
@@ -609,7 +652,8 @@ class LSMCBellmanOptimizer:
 
         n_steps = self.n_months - 1
         for t in tqdm(range(n_steps - 1, -1, -1), total=n_steps, desc="Backward induction", mininterval=1.0):
-            r = 1.0 + (equity[:, t + 1] / equity[:, t] - 1.0) * (1.0 - self.equity_tax_rate)  # after tax
+            # after tax, real
+            r = (1.0 + (equity[:, t + 1] / equity[:, t] - 1.0) * (1.0 - self.equity_tax_rate)) / self.inflation_factor
             gross = self.equity_shares[:, None] * r[None, :] + (1.0 - self.equity_shares[:, None]) * self.rf
             reg = WealthRegressor(equity[:, t], degree=self.regression_degree)
             proj, sum_y, sum_y2 = project_realised_values(self.wealth_grid, v_next, gross, reg.q,
@@ -617,7 +661,8 @@ class LSMCBellmanOptimizer:
             reg.fit_projection(proj.reshape(proj.shape[0], -1), sum_y.ravel(), sum_y2.ravel())
             self._store(t, reg)
 
-            cont = best_continuation(reg.q, proj)  # best equity share per (path, x)
+            cont = best_continuation(reg.q, proj, self.wealth_grid, self.equity_shares,
+                                     float(self.reserve[t]))  # best admissible equity share per (path, x)
             v_next = bellman_values(self.wealth_grid, cont, float(self.cf[t]), self.beta, self.gamma, self.epsilon,
                                     self.shortfall_penalty)
 
@@ -648,9 +693,9 @@ class LSMCBellmanOptimizer:
         self.survival_paths = self.survival_process.simulate(n_sims=self.n_sims_oos, dates=self.months)
         wealth, cons, share, invested, eq_before, sav_before, cap_tax = forward_paths(
             self.wealth_grid, self.coeffs, self.state_mean, self.state_std, self.state_degree, self.equity_shares,
-            self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf,
+            self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf_nominal,
             self.equity_tax_rate, self.savings_tax_rate, self.beta, self.gamma, self.epsilon,
-            not self.apply_terminal_penalty)
+            not self.apply_terminal_penalty, 1.0 / self.inflation_factor, self.reserve)
         self.opt_capital_tax = pd.DataFrame(cap_tax, index=self.months)
         self.opt_equity_before = pd.DataFrame(eq_before, index=self.months)
         self.opt_savings_before = pd.DataFrame(sav_before, index=self.months)
@@ -758,6 +803,7 @@ class LSMCBellmanOptimizer:
             "coeffs": self.coeffs, "state_mean": self.state_mean, "state_std": self.state_std,
             "state_degree": self.state_degree, "beta": np.float64(self.beta), "gamma": np.float64(self.gamma),
             "epsilon": np.float64(self.epsilon), "terminal_consume": np.bool_(not self.apply_terminal_penalty),
+            "price_index": self.price_index, "reserve": self.reserve,
         }
 
     def decide(self, t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
@@ -785,7 +831,7 @@ class LSMCBellmanOptimizer:
         """Category of every column of ``cashflow_items`` (for the composition plot)."""
         cats: Dict[str, str] = {}
         for cf in self.cashflows:
-            kind = type(cf).__name__
+            kind = getattr(cf, "kind", type(cf).__name__)
             if hasattr(cf, "components"):
                 for p in cf.pensions:
                     cats[f"{p.name} contribution"] = "Pension contributions"

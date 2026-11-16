@@ -10,6 +10,10 @@ class PensionPlan(ABC):
     name: str
     monthly_payout_brutto: float
 
+    def payout(self, date: dt.date) -> float:
+        """Gross monthly payout in ``date`` (nominal); constant unless overridden."""
+        return self.monthly_payout_brutto
+
     @abstractmethod
     def monthly_contribution(self, date: dt.date) -> float:
         """

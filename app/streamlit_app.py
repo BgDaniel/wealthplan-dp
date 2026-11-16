@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from config.stochastic.lsmc.lsmc_config_mapper import TECHNICAL_DEFAULTS, LSMCConfigMapper  # noqa: E402
 from wealthplan.tax.tax_model import TaxModel  # noqa: E402
+from wealthplan.economy.inflation import InflationModel  # noqa: E402
 from wealthplan.catalog import DEFAULT_PARAMS_DIR, delete_config, list_configs, load_config, save_config  # noqa: E402
 from wealthplan.jobs import (DEFAULT_JOBS_ROOT, cancel_job, delete_job, list_jobs, read_status,  # noqa: E402
                              submit_job)
@@ -351,6 +352,7 @@ def result_page() -> None:
     run_dir = Path(job["run_dir"])
     summary = json.loads((run_dir / "summary.json").read_text())
 
+    st.caption("Amounts in real euros of the start date (today's purchasing power) if inflation is configured.")
     _header("Result", job["name"],
             f'{summary["start"]} – {summary["end"]} · age {summary["age_start"]:g} → retirement at '
             f'{summary["age_retirement"]:g} · {summary["n_sims_regression"]} regression + '
@@ -465,14 +467,17 @@ def steering_page() -> None:
 
     _header("Steering", f"{month:%B %Y}", "What to do this month: given your current holdings the optimal "
             "policy of the run says how much you may consume and how much to buy or sell of equity and "
-            "savings account. Fixed costs include insurances and pension contributions.")
+            "savings account. Fixed costs include insurances and pension contributions. Amounts in "
+            "nominal euros of this month.")
 
+    # the policy works in real euros of the start date; this page shows nominal euros of the month
+    price = float(policy["price_index"][t]) if "price_index" in policy else 1.0
     if t == 0:
         eq_default = float(params["simulation_parameters"].get("initial_equity", 0.0))
         sav_default = float(params["simulation_parameters"]["initial_wealth"]) - eq_default
     else:
-        eq_default = float(quant.get("equity_before_p50", 0.0))
-        sav_default = float(quant.get("savings_before_p50", 0.0))
+        eq_default = price * float(quant.get("equity_before_p50", 0.0))
+        sav_default = price * float(quant.get("savings_before_p50", 0.0))
     with st.container(border=True):
         st.subheader("Your holdings at the start of the month")
         c1, c2, c3 = st.columns(3)
@@ -483,7 +488,10 @@ def steering_page() -> None:
         c3.markdown(f'<div class="facts">Defaults: {"configuration" if t == 0 else "median of the simulated paths"}'
                     f'<br>Total <b>{_eur(eq_now + sav_now)}</b></div>', unsafe_allow_html=True)
 
-    d = decide(policy, t, eq_now + sav_now)
+    d = decide(policy, t, (eq_now + sav_now) / price)
+    for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings"):
+        d[key] *= price  # back to nominal euros of the month
+    reserve = price * float(policy["reserve"][t]) if "reserve" in policy else 0.0
     income = float(items[items > 0].sum())
     fixed = float(-items[items < 0].sum())
 
@@ -502,9 +510,10 @@ def steering_page() -> None:
         st.markdown(_action("Equity (ETFs)", _trade(d["equity"] - eq_now),
                             f"target {_eur(d['equity'])} · {100 * d['equity_share']:.0f} % of the invested "
                             f"wealth", "equity"), unsafe_allow_html=True)
+        reserve_note = f" · incl. emergency reserve {_eur(reserve)}" if reserve > 0 else ""
         st.markdown(_action("Savings account", _trade(d["savings"] - sav_now),
                             f"target {_eur(d['savings'])} · {100 * (1 - d['equity_share']):.0f} % of the invested "
-                            f"wealth"), unsafe_allow_html=True)
+                            f"wealth{reserve_note}"), unsafe_allow_html=True)
         st.markdown(_action("Invested after this month", _eur(d["invested"]),
                             f"holdings {_eur(eq_now + sav_now)} + net cashflow {_eur(d['net_cashflow'])} − "
                             f"consumption {_eur(d['consumption'])}"), unsafe_allow_html=True)
@@ -599,12 +608,15 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
     tech = {**TECHNICAL_DEFAULTS, **data.get("technical", {})}
     util = data.get("utility_function", {})
     tax = {**dataclasses.asdict(TaxModel()), **data.get("tax", {})}
+    infl = {**{k: v for k, v in dataclasses.asdict(InflationModel()).items() if k != "start_date"},
+            **(data.get("inflation") or {})}
+    reserve_cfg = {"enabled": False, "months_of_fixed_costs": 6.0, **(data.get("reserve") or {})}
 
     with st.form(f"config_{name}", border=True):
         new_name = st.text_input("Name", name, help="file name in params/: letters, digits, _ - .")
-        tab_sim, tab_cf, tab_pen, tab_tax, tab_mkt, tab_num = st.tabs(
-            ["Person & horizon", "Income & expenses", "Pensions", "Taxes", "Market & mortality",
-             "Preferences & numerics"])
+        tab_sim, tab_cf, tab_pen, tab_tax, tab_infl, tab_mkt, tab_num = st.tabs(
+            ["Person & horizon", "Income & expenses", "Pensions", "Taxes", "Inflation & reserve",
+             "Market & mortality", "Preferences & numerics"])
 
         with tab_sim:
             c1, c2, c3, c4 = st.columns(4)
@@ -687,14 +699,51 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             allowance = c3.number_input("Pension allowance [€/year]", value=float(tax["pension_allowance_yearly"]),
                                         min_value=0.0, step=10.0, help="Werbungskosten-Pauschbetrag (102 €)")
 
+        with tab_infl:
+            st.caption("All amounts of the configuration are in euros of the start date. The optimisation runs in "
+                       "real euros (today's purchasing power); taxes apply to nominal amounts.")
+            c1, c2, c3 = st.columns(3)
+            infl_rate = c1.number_input("Inflation [%/yr]", value=100 * float(infl["rate"]), min_value=-2.0,
+                                        max_value=20.0, step=0.25, format="%.2f", help="0 disables inflation")
+            real_growth = c2.number_input("Real salary growth [%/yr]", value=100 * float(infl["salary_real_growth"]),
+                                          min_value=-5.0, max_value=10.0, step=0.25, format="%.2f",
+                                          help="salary growth on top of inflation")
+            pens_index = c3.number_input("Public pension adjustment [%/yr]",
+                                         value=100 * float(infl["public_pension_indexation"]), min_value=-2.0,
+                                         max_value=10.0, step=0.25, format="%.2f",
+                                         help="Rentenanpassung; the public pension above is in today's euros")
+            exp_indexed = c1.toggle("Expenses grow with inflation", value=bool(infl["expenses_indexed"]),
+                                    help="rent, living costs, insurances")
+            brackets_indexed = c2.toggle("Tax brackets indexed", value=bool(infl["tax_brackets_indexed"]),
+                                         help="tariff brackets, allowances and Basisvorsorge room grow with inflation")
+            st.divider()
+            c1, c2, _ = st.columns(3)
+            reserve_on = c1.toggle("Emergency reserve", value=bool(reserve_cfg["enabled"]),
+                                   help="keep a reserve in the savings account (never invested in equity)")
+            reserve_months = c2.number_input("Reserve [months of fixed costs]",
+                                             value=float(reserve_cfg["months_of_fixed_costs"]), min_value=0.0,
+                                             max_value=60.0, step=1.0)
+
         with tab_mkt:
             c1, c2, c3, c4 = st.columns(4)
             mu = c1.number_input("Equity return [%/yr]", value=100 * float(sto["yearly_return"]), step=0.25,
                                  format="%.2f")
             sigma = c2.number_input("Equity volatility [%/yr]", value=100 * float(sto["sigma"]), min_value=0.0,
                                     step=1.0)
-            b = c3.number_input("Gompertz b", value=float(surv["b"]), min_value=1e-7, format="%.2e")
-            c = c4.number_input("Gompertz c", value=float(surv["c"]), min_value=1e-4, format="%.4f")
+            tables = ["destatis_unisex", "destatis_male", "destatis_female", "custom"]
+            table = c3.selectbox("Mortality table", tables, index=tables.index(surv.get("table", "custom")),
+                                 format_func={"destatis_unisex": "Destatis 2021/23 unisex",
+                                              "destatis_male": "Destatis 2021/23 men",
+                                              "destatis_female": "Destatis 2021/23 women",
+                                              "custom": "custom Gompertz b, c"}.get,
+                                 help="Gompertz fit to the period life table (remaining life expectancy at 40 / 65)")
+            age_shift = c4.number_input("Age shift [years]", value=float(surv.get("age_shift", 0.0)), min_value=-15.0,
+                                        max_value=15.0, step=1.0,
+                                        help="-3 ≈ cohort adjustment: mortality of a 3 years younger person")
+            b = c3.number_input("Gompertz b (custom)", value=float(surv.get("b", 9.5e-5)), min_value=1e-8,
+                                format="%.2e")
+            c = c4.number_input("Gompertz c (custom)", value=float(surv.get("c", 0.085)), min_value=1e-4,
+                                format="%.4f")
             n_sims = c1.number_input("Regression paths", value=int(sto["n_sims"]), min_value=10, step=500)
             n_oos = c2.number_input("Out-of-sample paths", value=int(sto.get("n_sims_oos", sto["n_sims"])),
                                     min_value=10, step=1000)
@@ -752,7 +801,12 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                       "pension_allowance_yearly": allowance}
         new["stochastic"] = {"yearly_return": mu / 100.0, "sigma": sigma / 100.0, "n_sims": int(n_sims),
                              "n_sims_oos": int(n_oos), "seed": int(seed),
-                             "survival_model": {"b": b, "c": c, "seed": int(surv_seed)}}
+                             "survival_model": {"table": table, "age_shift": age_shift, "b": b, "c": c,
+                                                "seed": int(surv_seed)}}
+        new["inflation"] = {"rate": infl_rate / 100.0, "salary_real_growth": real_growth / 100.0,
+                            "expenses_indexed": bool(exp_indexed), "public_pension_indexation": pens_index / 100.0,
+                            "tax_brackets_indexed": bool(brackets_indexed)}
+        new["reserve"] = {"enabled": bool(reserve_on), "months_of_fixed_costs": reserve_months}
         new["technical"] = {"w_max": w_max, "n_wealth": int(n_wealth), "n_equity_shares": int(n_shares),
                             "max_equity_share": max_share, "regression_degree": int(degree),
                             "shortfall_penalty": penalty, "apply_terminal_penalty": bool(terminal),

@@ -30,6 +30,7 @@ def small_params(**technical) -> dict:
     data["lifecycle"]["salary"]["retirement_date"] = data["simulation_parameters"]["retirement_date"]
     data["total_pension"]["retirement_date"] = data["simulation_parameters"]["retirement_date"]
     data["stochastic"].update(n_sims=200, n_sims_oos=300)
+    data["reserve"] = {"enabled": False}  # tests of the pure policy; the reserve has its own test
     data["technical"].update({"n_wealth": 60, "n_equity_shares": 6, "w_max": 1_000_000.0, "use_cache": False,
                               **technical})
     return data
@@ -169,7 +170,8 @@ class TestLSMCBellmanOptimizer(unittest.TestCase):
 
     def test_cashflow_items_sum_to_cashflow(self) -> None:
         opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(small_params()))
-        np.testing.assert_allclose(opt.cashflow_items().sum(axis=1).values, opt.cf, atol=1e-9)
+        # items are nominal, cf is in real euros of the start date
+        np.testing.assert_allclose(opt.cashflow_items().sum(axis=1).values / opt.price_index, opt.cf, atol=1e-9)
 
 
 if __name__ == "__main__":

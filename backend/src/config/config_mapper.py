@@ -19,6 +19,7 @@ from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan_dyn
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
 from wealthplan.cashflows.pension.ruerup_pension import RuerupPension
 from wealthplan.tax.tax_model import TaxModel
+from wealthplan.economy.inflation import IndexedCashflow, InflationModel
 
 
 # ----------------------
@@ -75,6 +76,10 @@ KEY_BETA: str = "beta"
 
 KEY_INITIAL_EQUITY: str = "initial_equity"
 KEY_TAX: str = "tax"
+KEY_INFLATION: str = "inflation"
+KEY_INFLATION_RATE: str = "inflation_rate"
+KEY_RESERVE: str = "reserve"
+KEY_RESERVE_MONTHS: str = "reserve_months"
 KEY_SAVINGS_TAX_RATE: str = "savings_tax_rate"
 KEY_EQUITY_TAX_RATE: str = "equity_tax_rate"
 KEY_RUERUP_PLANS: str = "ruerup_plans"
@@ -127,11 +132,16 @@ class ConfigMapper:
         sim: Dict[str, Any] = data[KEY_SIMULATION]
 
         tax = TaxModel.from_dict(data.get(KEY_TAX))
+        inflation = InflationModel.from_dict(data.get(KEY_INFLATION), sim[KEY_START_DATE])
 
         cashflows: List[CashflowBase] = []
         cashflows.extend(cls._load_lifecycle_cashflows(data))
         cashflows.extend(cls._load_insurances(data))
-        cashflows.extend(cls._load_total_pension(data, tax))
+        cashflows = cls._index_cashflows(cashflows, inflation, sim[KEY_START_DATE])
+        cashflows.extend(cls._load_total_pension(data, tax, inflation))
+
+        reserve: Dict[str, Any] = data.get(KEY_RESERVE) or {}
+        reserve_months = float(reserve.get("months_of_fixed_costs", 0.0)) if reserve.get("enabled", False) else 0.0
 
         params: Dict[str, Any] = {
             KEY_RUN_CONFIG_ID: sim[KEY_RUN_CONFIG_ID],
@@ -146,6 +156,8 @@ class ConfigMapper:
             KEY_CASHFLOWS: cashflows,
             KEY_SAVINGS_TAX_RATE: tax.savings_tax_rate,
             KEY_EQUITY_TAX_RATE: tax.equity_tax_rate,
+            KEY_INFLATION_RATE: inflation.rate,
+            KEY_RESERVE_MONTHS: reserve_months,
         }
 
         # ----------------------
@@ -182,6 +194,22 @@ class ConfigMapper:
         return cashflows
 
     @staticmethod
+    def _index_cashflows(cashflows: List[CashflowBase], inflation: InflationModel,
+                         start: Any) -> List[CashflowBase]:
+        """
+        Let salary and fixed expenses grow (amounts in the YAML are in euros of the start date):
+        salary with inflation and real growth, expenses with inflation if indexed.
+        """
+        out: List[CashflowBase] = []
+        for cf in cashflows:
+            if isinstance(cf, Salary):
+                rate = (1.0 + inflation.rate) * (1.0 + inflation.salary_real_growth) - 1.0
+            else:
+                rate = inflation.rate if inflation.expenses_indexed else 0.0
+            out.append(IndexedCashflow(cf, rate, start) if rate != 0.0 else cf)
+        return out
+
+    @staticmethod
     def _load_insurances(data: Dict[str, Any]) -> List[CashflowBase]:
         """
         Instantiate insurance cashflows.
@@ -201,13 +229,15 @@ class ConfigMapper:
     # Pension handling
     # ----------------------
     @staticmethod
-    def _load_total_pension(data: Dict[str, Any], tax: TaxModel) -> List[CashflowBase]:
+    def _load_total_pension(data: Dict[str, Any], tax: TaxModel,
+                            inflation: InflationModel | None = None) -> List[CashflowBase]:
         """
         Create an aggregated TotalPension cashflow from all pension plans.
 
         Args:
             data: Parsed YAML configuration.
             tax: Tax parameters (pension income tax, Rürup refund).
+            inflation: Indexation of the public pension and of the tariff brackets.
 
         Returns:
             List containing a single TotalPension instance,
@@ -248,7 +278,9 @@ class ConfigMapper:
         for p in cfg.get("public_pension_plan", []):
             pension_plans.append(
                 PublicPensionPlan(
-                    monthly_payout_brutto=p[KEY_MONTHLY_PAYOUT_BRUTTO]
+                    monthly_payout_brutto=p[KEY_MONTHLY_PAYOUT_BRUTTO],
+                    indexation=inflation.public_pension_indexation if inflation else 0.0,
+                    base_date=data[KEY_SIMULATION][KEY_START_DATE],
                 )
             )
 
@@ -269,7 +301,8 @@ class ConfigMapper:
                 )
             )
 
-        return [TotalPension(pensions=pension_plans, retirement_date=retirement_date, tax=tax)]
+        return [TotalPension(pensions=pension_plans, retirement_date=retirement_date, tax=tax,
+                             tax_scale=inflation.tax_scale if inflation else None)]
 
     @staticmethod
     def _load_crra_params(data: Dict[str, Any]) -> Dict[str, float]:

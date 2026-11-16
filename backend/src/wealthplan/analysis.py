@@ -1,4 +1,7 @@
-"""Derived analyses of a solved plan: depletion risk, taxes, Rürup vs. ETF savings plan."""
+"""Derived analyses of a solved plan: depletion risk, taxes, Rürup vs. ETF savings plan.
+
+All amounts in real euros of the start date (deflated with the plan's price index).
+"""
 
 from typing import Any, Dict, Tuple
 
@@ -13,8 +16,7 @@ def depletion_risk(opt, months_of_costs: float = 6.0) -> pd.DataFrame:
     Per month, among the paths alive: probability that the wealth is below ``months_of_costs``
     times the month's fixed costs, and probability that the fixed costs cannot be paid.
     """
-    items = opt.cashflow_items()
-    fixed = -items.clip(upper=0.0).sum(axis=1).values
+    fixed = opt.fixed_costs
     wealth = opt.opt_wealth.values
     alive = np.isfinite(wealth)
     n_alive = np.maximum(alive.sum(axis=1), 1)
@@ -35,7 +37,7 @@ def yearly_taxes(opt) -> Tuple[pd.DataFrame, np.ndarray]:
     capital_tax : np.ndarray, shape (n_years, n_paths)
         Capital gains tax per year and path (only months alive; NaN if dead the whole year).
     """
-    items = opt.cashflow_items()
+    items = opt.cashflow_items().div(opt.price_index, axis=0)  # real
     years = np.array([m.year for m in opt.months])
     income_tax = -items.get("Income tax on pensions", pd.Series(0.0, index=items.index)).values
     refund = items.get("Rürup tax refund", pd.Series(0.0, index=items.index)).values
@@ -78,15 +80,17 @@ def ruerup_vs_etf(opt, etf_ter: float = 0.002) -> Tuple[pd.DataFrame, Dict[str, 
         return pd.DataFrame(), {}
     tax = tp.tax
     others = [p for p in tp.pensions if not isinstance(p, RuerupPension)]
-    taxable_others = sum(p.monthly_payout_brutto * tp.taxable_share(p) for p in others)
-    taxable_ruerup = sum(p.monthly_payout_brutto * tp.taxable_share(p) for p in plans)
-    gross_ruerup = sum(p.monthly_payout_brutto for p in plans)
-    extra_tax = (tax.pension_income_tax_monthly(taxable_others + taxable_ruerup)
-                 - tax.pension_income_tax_monthly(taxable_others))
-    net_pension = gross_ruerup - extra_tax
+    def net_pension(date) -> float:
+        """Rürup pension minus the additional income tax it causes (nominal)."""
+        scale = tp.tax_scale(date)
+        taxable_others = sum(p.payout(date) * tp.taxable_share(p) for p in others)
+        taxable_ruerup = sum(p.payout(date) * tp.taxable_share(p) for p in plans)
+        extra = (tax.pension_income_tax_monthly(taxable_others + taxable_ruerup, scale)
+                 - tax.pension_income_tax_monthly(taxable_others, scale))
+        return sum(p.payout(date) for p in plans) - extra
 
     mu = opt.gbm_returns.yearly_return
-    r_m = (((1.0 + mu) * (1.0 - etf_ter)) ** (1.0 / 12.0) - 1.0) * (1.0 - tax.equity_tax_rate)
+    r_m = (((1.0 + mu) * (1.0 - etf_ter)) ** (1.0 / 12.0) - 1.0) * (1.0 - tax.equity_tax_rate)  # nominal
     r_idx = opt.retirement_index
     n = opt.n_months
     rue = np.zeros(n)
@@ -98,7 +102,7 @@ def ruerup_vs_etf(opt, etf_ter: float = 0.002) -> Tuple[pd.DataFrame, Dict[str, 
     for t, m in enumerate(opt.months):
         if t < r_idx:
             c = sum(p.monthly_contribution(m) for p in plans)
-            outlay = c - tax.basis_pension_refund_monthly(c)
+            outlay = c - tax.basis_pension_refund_monthly(c, tp.tax_scale(m))
             rue[t] = etf[t] = -outlay
             k = (k + outlay) * (1.0 + r_m)
         else:
@@ -106,11 +110,13 @@ def ruerup_vs_etf(opt, etf_ter: float = 0.002) -> Tuple[pd.DataFrame, Dict[str, 
                 k_ret = k
                 months_left = n - r_idx
                 withdrawal = k * r_m / (1.0 - (1.0 + r_m) ** -months_left) if r_m > 0 else k / months_left
-            rue[t] = net_pension
+            rue[t] = net_pension(m)
             etf[t] = withdrawal
             k = max((k - withdrawal) * (1.0 + r_m), 0.0)
         capital[t] = k
 
+    # nominal -> real euros of the start date
+    rue, etf, capital = rue / opt.price_index, etf / opt.price_index, capital / opt.price_index
     alive = opt.survival_probabilities
     death_prob = alive * (1.0 - opt.p_survive)  # dies during month t
     frame = pd.DataFrame({
@@ -118,14 +124,15 @@ def ruerup_vs_etf(opt, etf_ter: float = 0.002) -> Tuple[pd.DataFrame, Dict[str, 
         "ruerup_cum": np.cumsum(alive * rue), "etf_cum": np.cumsum(alive * etf),
     }, index=opt.months)
     frame["etf_cum_with_heirs"] = frame["etf_cum"] + np.cumsum(death_prob * capital)
+    p_ret = opt.price_index[min(r_idx, n - 1)]
     after = frame.iloc[r_idx:] if r_idx < n else frame.iloc[0:0]
     cross = after[after["ruerup_cum"] >= after["etf_cum"]]
     info = {
-        "ruerup_capital_at_retirement": sum(p.capital_at_pension_start() for p in plans),
-        "etf_capital_at_retirement": k_ret,
-        "ruerup_net_pension": net_pension,
-        "ruerup_gross_pension": gross_ruerup,
-        "etf_monthly_withdrawal": withdrawal,
+        "ruerup_capital_at_retirement": sum(p.capital_at_pension_start() for p in plans) / p_ret,
+        "etf_capital_at_retirement": k_ret / p_ret,
+        "ruerup_net_pension": rue[r_idx] if r_idx < n else 0.0,
+        "ruerup_gross_pension": sum(p.payout(opt.months[min(r_idx, n - 1)]) for p in plans) / p_ret,
+        "etf_monthly_withdrawal": etf[r_idx] if r_idx < n else 0.0,
         "net_monthly_cost": -rue[0] if r_idx > 0 else 0.0,
         "break_even_age": float(cross["age"].iloc[0]) if len(cross) else None,
         "etf_ter": etf_ter,

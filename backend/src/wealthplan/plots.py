@@ -286,7 +286,7 @@ COMPOSITION = (("Salary", BLUE, ""), ("Pensions (gross)", "#5b8ef0", ""), ("Tax 
 
 def composition(opt, t) -> Figure:
     """Deterministic cashflows by category, yearly average per month (income +, outflows −)."""
-    items = opt.cashflow_items()
+    items = opt.cashflow_items().div(opt.price_index, axis=0)  # real euros
     cats = opt.cashflow_categories()
     grouped = items.T.groupby(lambda c: cats.get(c, "Living costs")).sum().T
     years = np.array([m.year for m in opt.months])

@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict
 
 
@@ -21,6 +22,35 @@ KEY_SURVIVAL_PROCESS: str = "survival_process"
 KEY_SURVIVAL_B: str = "b"
 KEY_SURVIVAL_C: str = "c"
 KEY_SURVIVAL_SEED: str = "seed"
+KEY_SURVIVAL_TABLE: str = "table"
+KEY_SURVIVAL_AGE_SHIFT: str = "age_shift"
+
+# Gompertz fits (hazard b * exp(c * age)) to the remaining life expectancy at 40 and 65 of the
+# Destatis period life table 2021/23 (men 39.0 / 17.6 years, women 43.6 / 21.0 years; unisex:
+# their mean).
+SURVIVAL_TABLES: Dict[str, tuple] = {
+    "destatis_unisex": (2.592e-05, 0.0945),
+    "destatis_male": (3.752e-05, 0.0925),
+    "destatis_female": (1.590e-05, 0.0980),
+}
+
+
+def survival_parameters(cfg: Dict[str, Any]) -> tuple:
+    """
+    Gompertz (b, c) from the configuration: a preset ``table`` (``SURVIVAL_TABLES``) or
+    ``custom`` b / c. ``age_shift`` (years) shifts the hazard to younger / older ages: -3 makes
+    you 3 years "younger" in mortality terms (rough cohort adjustment of a period table),
+    i.e. b -> b * exp(c * age_shift).
+    """
+    table = cfg.get(KEY_SURVIVAL_TABLE, "custom")
+    if table == "custom":
+        b, c = float(cfg[KEY_SURVIVAL_B]), float(cfg[KEY_SURVIVAL_C])
+    elif table in SURVIVAL_TABLES:
+        b, c = SURVIVAL_TABLES[table]
+    else:
+        raise ValueError(f"unknown survival table {table!r}; use custom or one of {list(SURVIVAL_TABLES)}")
+    shift = float(cfg.get(KEY_SURVIVAL_AGE_SHIFT, 0.0))
+    return b * math.exp(c * shift), c
 
 
 class StochasticConfigMapper(ConfigMapper):
@@ -60,7 +90,7 @@ class StochasticConfigMapper(ConfigMapper):
         )
 
         surv_cfg: Dict[str, Any] = stochastic[KEY_SURVIVAL_MODEL]
-        b, c = float(surv_cfg[KEY_SURVIVAL_B]), float(surv_cfg[KEY_SURVIVAL_C])
+        b, c = survival_parameters(surv_cfg)
         params[KEY_SURVIVAL_MODEL] = SurvivalModel(b=b, c=c)
         params[KEY_SURVIVAL_PROCESS] = SurvivalProcess(
             b=b, c=c, age=params[KEY_CURRENT_AGE], seed=surv_cfg.get(KEY_SURVIVAL_SEED)
