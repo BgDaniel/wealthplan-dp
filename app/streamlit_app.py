@@ -856,6 +856,36 @@ def configurations_page() -> None:
             st.rerun()
 
 
+# ------------------------------------------------------------------ page: validation
+
+
+def validation_page() -> None:
+    """Run the closed-form checks of wealthplan.validation."""
+    from wealthplan.validation import CHECKS, results_as_dicts
+
+    _header("App", "Validation", "The optimizer against closed-form solutions: deterministic consumption "
+            "smoothing (Euler equation and budget), constant income, tax on interest, inflation, mortality "
+            "(Yaari) and the Merton equity share. Each check solves a small plan (about 15 s in total).")
+    if st.button("Run checks", type="primary", icon=":material/fact_check:"):
+        rows = []
+        progress = st.progress(0.0)
+        for i, (name, check) in enumerate(CHECKS.items()):
+            rows.extend(results_as_dicts(check()))
+            progress.progress((i + 1) / len(CHECKS), text=name)
+        st.session_state["validation"] = rows
+    rows = st.session_state.get("validation")
+    if rows:
+        passed = sum(r["passed"] for r in rows)
+        (st.success if passed == len(rows) else st.error)(f"{passed} / {len(rows)} checks passed")
+        frame = pd.DataFrame(rows)
+        frame.insert(0, "", np.where(frame["passed"], "✓", "✕"))
+        st.dataframe(frame.drop(columns="passed"), hide_index=True, width="stretch",
+                     column_config={"expected": st.column_config.NumberColumn(format="%.6g"),
+                                    "model": st.column_config.NumberColumn(format="%.6g"),
+                                    "rel_error": st.column_config.NumberColumn("rel. error", format="%.2e"),
+                                    "tolerance": st.column_config.NumberColumn(format="%.1e")})
+
+
 # ------------------------------------------------------------------ page: cache
 
 
@@ -896,6 +926,7 @@ def main() -> None:
             st.Page(configurations_page, title="Configurations", icon=":material/tune:", url_path="configurations"),
         ],
         "App": [
+            st.Page(validation_page, title="Validation", icon=":material/fact_check:", url_path="validation"),
             st.Page(cache_page, title="Cache", icon=":material/storage:", url_path="cache"),
         ],
     })

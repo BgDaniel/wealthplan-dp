@@ -143,6 +143,21 @@ taxed as in the model); from retirement a level withdrawal that empties the ETF 
 end, against the Rürup pension net of the additional income tax it causes. Flows weighted with
 the survival probability; the ETF capital left at death is shown separately (heirs).
 
+## Validation against closed forms (`python -m wealthplan.validation`, app page Validation)
+
+| Case | Closed form |
+|---|---|
+| deterministic consumption smoothing | c_{t+1} = (βR)^{1/γ} c_t, c_0 = W_0 / Σ (g/R)^t |
+| constant income | c_0 = (W_0 + Σ y/R^t) / Σ (g/R)^t |
+| tax on interest | as above with R = 1 + r_m (1 − τ) |
+| inflation | as above with R = R_nom / (1+π)^{1/12} (real terms) |
+| mortality without annuities (Yaari) | c_{t+1}/c_t = (β p_t R)^{1/γ} |
+| Merton | equity share = argmax E[(aR + (1−a)R_f)^{1−γ}] (≈ (μ−r)/(γσ²)) |
+
+The checks use 800 wealth grid points; the error of c_0 falls about quadratically with the grid
+density (100 points: 2.9 %, 400: 0.2 %, 1600: 0.015 %). Single-month consumption growth
+jitters because the continuation value is linear between grid points.
+
 ## Layout
 
 ```
