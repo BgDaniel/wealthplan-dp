@@ -25,7 +25,7 @@ poetry run streamlit run app/streamlit_app.py
   the table shows progress, remaining time and key figures.
 * **Result**: key figures, figures (wealth, consumption, equity share, equity vs. savings
   holdings, monthly buy/sell per asset, saving/withdrawal, equity policy map, survival,
-  regression R², depletion risk, taxes per year, Rürup vs. ETF plan, cashflow composition),
+  regression R², depletion risk, taxes per year, Rürup vs. ETF plan),
   runtimes, downloads.
 * **Compare**: median curves, key figures and differing parameters of up to four runs.
 * **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete), incl.

@@ -306,41 +306,6 @@ def ruerup_vs_etf_plot(opt, t) -> Figure:
     return fig
 
 
-COMPOSITION = (("Salary", BLUE, ""), ("Pensions (gross)", "#5b8ef0", ""), ("Tax refund", "#9bbaf7", ""),
-               ("Living costs", PURPLE, ""), ("Insurances", "#c3a8f3", "//"),
-               ("Pension contributions", "#7d55cf", ""), ("Social security", "#8f6ee0", ".."),
-               ("Income tax", "#5b3aa6", "xx"))
-
-
-def composition(opt, t) -> Figure:
-    """Deterministic cashflows by category, yearly average per month (income +, outflows −)."""
-    items = opt.cashflow_items().div(opt.price_index, axis=0)  # real euros
-    cats = opt.cashflow_categories()
-    grouped = items.T.groupby(lambda c: cats.get(c, "Living costs")).sum().T
-    years = np.array([m.year for m in opt.months])
-    yearly = grouped.groupby(years).mean()
-    age = np.array([opt.age_grid[np.argmax(years == y)] for y in yearly.index])
-    fig, ax = plt.subplots(figsize=(11, 4.8))
-    pos_base = np.zeros(len(yearly))
-    neg_base = np.zeros(len(yearly))
-    for name, color, hatch in COMPOSITION:
-        if name not in yearly or not yearly[name].abs().sum():
-            continue
-        v = yearly[name].values
-        base = np.where(v >= 0, pos_base, neg_base)
-        ax.fill_between(age, base, base + v, step="post", color=color, hatch=hatch or None, edgecolor=t["bg"],
-                        lw=0.4, label=name)
-        pos_base = np.where(v >= 0, pos_base + v, pos_base)
-        neg_base = np.where(v < 0, neg_base + v, neg_base)
-    ax.step(age, yearly.sum(axis=1).values, where="post", color=t["fg"], lw=1.4, label="net cashflow")
-    ax.axhline(0.0, color=t["muted"], lw=0.8)
-    ax.set(title="Cashflow composition (average per month of each year)", xlabel="Age")
-    _euro(ax)
-    _retirement(ax, opt, t)
-    ax.legend(loc="lower left", ncol=4, fontsize=8.5)
-    return fig
-
-
 COMPARE_STYLES = ((BLUE, "-"), (PURPLE, "--"), ("#8fb3f5", ":"), ("#cdb6f7", "-."))
 
 
@@ -377,7 +342,6 @@ FIGURES: Dict[str, Tuple[str, Callable]] = {
     "10_depletion": ("Depletion risk", depletion),
     "11_taxes": ("Taxes", taxes),
     "12_ruerup_vs_etf": ("Rürup vs. ETF", ruerup_vs_etf_plot),
-    "13_composition": ("Cashflow composition", composition),
 }
 
 

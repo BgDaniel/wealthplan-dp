@@ -70,7 +70,6 @@ FIGURE_TITLES = {
     "10_depletion": "Depletion risk",
     "11_taxes": "Taxes",
     "12_ruerup_vs_etf": "Rürup vs. ETF",
-    "13_composition": "Cashflow composition",
 }
 
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
