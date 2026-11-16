@@ -85,8 +85,11 @@ median share jumping between 0 % and 60 % around retirement with degree 2, a smo
 month (mean 0, variance 1), so the comparison between equity shares is not distorted by
 the random drift of a single month.
 
-**Shortfall.** If w + y < 0 the fixed expenses cannot be paid: c = 0, x = 0 and each missing
-euro costs `shortfall_penalty` utility.
+**Shortfall / out of money.** If w + y < 0 the fixed expenses cannot be paid: c = 0, x = 0
+(holdings empty) and each missing euro costs `shortfall_penalty` utility; the gap is not carried
+as debt. Results report the share of paths out of money at least once, the age from which
+≥ 5 % of the paths are affected and the mean unpaid fixed costs; the figures hatch those ages
+red. The last plan month is not counted (the plan spends the wealth down to its end date).
 
 **Cache.** The regression coefficients per month are stored in `.cache/lsmc_<hash>/`. The
 hash covers every parameter of the backward induction plus a solver version, but not

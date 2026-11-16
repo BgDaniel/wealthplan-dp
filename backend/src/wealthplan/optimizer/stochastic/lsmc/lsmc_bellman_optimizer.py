@@ -632,6 +632,7 @@ class LSMCBellmanOptimizer:
         self.opt_extra_cashflow = pd.DataFrame()
         self.opt_ruerup_capital = pd.DataFrame()
         self.opt_ruerup_tax = pd.DataFrame()
+        self.opt_shortfall = pd.DataFrame()
         self.survival_paths = np.empty((0, 0))
         self.monthly_cashflows = pd.Series(self.cf, index=self.months)
 
@@ -804,6 +805,10 @@ class LSMCBellmanOptimizer:
         self.opt_extra_cashflow = pd.DataFrame(np.where(dead, np.nan, ruerup["extra"]), index=self.months)
         self.opt_ruerup_capital = pd.DataFrame(np.where(dead, np.nan, ruerup["capital"]), index=self.months)
         self.opt_ruerup_tax = pd.DataFrame(np.where(dead, np.nan, ruerup["tax"]), index=self.months)
+        # out of money: fixed costs that cannot be paid from wealth + net cashflow (real euros);
+        # the model then sets consumption and holdings to 0 and does not carry the gap as debt
+        gap = np.maximum(-(wealth + self.cf[:, None] + ruerup["extra"]), 0.0)
+        self.opt_shortfall = pd.DataFrame(np.where(dead, np.nan, gap), index=self.months)
         self.opt_capital_tax = pd.DataFrame(cap_tax, index=self.months)
         self.opt_equity_before = pd.DataFrame(eq_before, index=self.months)
         self.opt_savings_before = pd.DataFrame(sav_before, index=self.months)
@@ -839,10 +844,25 @@ class LSMCBellmanOptimizer:
         alive = ~np.isnan(cons)
         disc = self.beta ** np.arange(self.n_months)[:, None]
         u = crra_utility(np.where(alive, cons, 0.0), self.gamma, self.epsilon)
-        shortfall = np.maximum(-(self.opt_wealth.values + self.cf[:, None]
-                                 + np.nan_to_num(self.opt_extra_cashflow.values)), 0.0)
-        u = u - self.shortfall_penalty * np.where(alive, shortfall, 0.0)
+        u = u - self.shortfall_penalty * np.where(alive, np.nan_to_num(self.opt_shortfall.values), 0.0)
         return np.sum(np.where(alive, disc * u, 0.0), axis=0)
+
+    def out_of_money(self) -> pd.DataFrame:
+        """
+        Per month, among the paths alive: share that cannot pay the fixed costs this month
+        (``share_now``) and share that has been out of money at least once so far (``share_ever``).
+        The last plan month is not counted: by design the plan spends the wealth down to its end
+        date, a small gap there is an artefact of the horizon, not a real shortfall.
+        """
+        gap = self.opt_shortfall.values
+        alive = np.isfinite(gap)
+        n_alive = np.maximum(alive.sum(axis=1), 1)
+        now = np.where(alive, gap > 0.0, False)
+        now[-1] = False
+        ever = np.maximum.accumulate(now, axis=0) & alive
+        return pd.DataFrame({"age": self.age_grid, "alive_paths": alive.sum(axis=1),
+                             "share_now": now.sum(axis=1) / n_alive, "share_ever": ever.sum(axis=1) / n_alive},
+                            index=self.months)
 
     def summary(self) -> Dict[str, Any]:
         """Key figures of the solved plan (amounts in euro)."""
@@ -851,8 +871,9 @@ class LSMCBellmanOptimizer:
         r = self.retirement_index
         wealth, cons, share = self.opt_wealth.values, self.opt_consumption.values, self.opt_equity_share.values
         u = self.realised_utility()
-        extra = np.nan_to_num(self.opt_extra_cashflow.values)
-        shortfall = np.nansum(np.maximum(-(wealth + self.cf[:, None] + extra), 0.0) > 0.0, axis=0) > 0
+        shortfall = np.nansum(self.opt_shortfall.values[:-1] > 0.0, axis=0) > 0  # last month: horizon end
+        oom = self.out_of_money()
+        hit = oom.index[oom["share_ever"] >= 0.05]
 
         def at(data: np.ndarray, t: int, q: float = 50.0) -> float:
             if t >= data.shape[0] or not np.isfinite(data[t]).any():
@@ -880,6 +901,8 @@ class LSMCBellmanOptimizer:
                 "consumption_working_median": float(np.nanmedian(cons[:r])) if r > 0 else float("nan"),
                 "consumption_retired_median": float(np.nanmedian(cons[r:])) if r < self.n_months else float("nan"),
                 "prob_shortfall": float(shortfall.mean()),
+                "out_of_money_age_5pct": float(oom.loc[hit[0], "age"]) if len(hit) else float("nan"),
+                "unpaid_fixed_costs_mean": float(np.nansum(self.opt_shortfall.values[:-1], axis=0).mean()),
                 "life_expectancy": float(self.age_grid[0] + self.survival_paths.sum(axis=1).mean() / 12.0),
                 "regression_r2_median": float(np.nanmedian(list(self.r_squared.values()))),
                 "from_cache": self.from_cache,

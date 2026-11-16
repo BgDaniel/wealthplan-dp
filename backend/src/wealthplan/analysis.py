@@ -20,9 +20,10 @@ def depletion_risk(opt, months_of_costs: float = 6.0) -> pd.DataFrame:
     alive = np.isfinite(wealth)
     n_alive = np.maximum(alive.sum(axis=1), 1)
     low = np.where(alive, wealth < months_of_costs * fixed[:, None], False).sum(axis=1) / n_alive
-    short = np.where(alive, wealth + opt.cf[:, None] < 0.0, False).sum(axis=1) / n_alive
+    oom = opt.out_of_money()  # incl. the path-dependent Rürup pension
     return pd.DataFrame({"age": opt.age_grid, "alive_paths": alive.sum(axis=1), "low_wealth": low,
-                         "shortfall": short}, index=opt.months)
+                         "shortfall": oom["share_now"].values, "shortfall_ever": oom["share_ever"].values},
+                        index=opt.months)
 
 
 def yearly_taxes(opt) -> Tuple[pd.DataFrame, np.ndarray]:

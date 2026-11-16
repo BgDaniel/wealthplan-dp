@@ -61,6 +61,20 @@ class TestAnalysis(unittest.TestCase):
         gross = expected / 10_000.0 * float(plan["pension_factor"])
         np.testing.assert_allclose(sim["extra"][r] + sim["tax"][r], gross, rtol=1e-10)
 
+    def test_out_of_money(self) -> None:
+        """No income, high fixed costs, little wealth: everybody runs out of money; shares consistent."""
+        data = small_params()
+        data["lifecycle"]["salary"] = {"mode": "net", "monthly_net": 0.0}
+        data["simulation_parameters"]["initial_wealth"] = 20_000.0
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
+        opt.solve()
+        oom = opt.out_of_money()
+        self.assertTrue((oom["share_ever"] >= oom["share_now"] - 1e-12).all())
+        summary = opt.summary()
+        self.assertGreater(summary["prob_shortfall"], 0.9)
+        self.assertGreater(summary["unpaid_fixed_costs_mean"], 0.0)
+        self.assertEqual(oom["share_now"].values[-1], 0.0)  # last month: horizon end, not counted
+
     def test_categories_cover_all_items(self) -> None:
         items = self.opt.cashflow_items()
         cats = self.opt.cashflow_categories()

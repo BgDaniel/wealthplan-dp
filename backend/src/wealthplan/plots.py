@@ -47,6 +47,28 @@ def _euro(ax) -> None:
         lambda v, _: f"{v / 1e3:,.0f} k€" if abs(v) >= 1e4 else f"{v:,.0f} €"))
 
 
+OUT_OF_MONEY = "#e66767"  # status colour (critical), always with a text label
+
+
+def _mark_out_of_money(ax, opt, t: Dict[str, str], threshold: float = 0.05) -> None:
+    """
+    Hatch the ages from which at least ``threshold`` of the paths alive have been out of money
+    (fixed costs not payable) at least once, with a label.
+    """
+    if opt.opt_shortfall.empty:
+        return
+    oom = opt.out_of_money()
+    hit = np.where((oom["share_ever"].values >= threshold) & (oom["alive_paths"].values >= 20))[0]
+    if not hit.size:
+        return
+    a0 = opt.age_grid[hit[0]]
+    share_end = float(oom["share_ever"].values[hit[-1]])
+    ax.axvspan(a0, opt.age_grid[-1], facecolor="none", edgecolor=OUT_OF_MONEY, hatch="//", lw=0, alpha=0.45)
+    ax.axvline(a0, color=OUT_OF_MONEY, lw=1.2)
+    ax.text(a0, ax.get_ylim()[1], f" ⚠ out of money: ≥{100 * threshold:.0f} % of paths from age {a0:.0f} "
+            f"(up to {100 * share_end:.0f} %)", color=OUT_OF_MONEY, va="top", ha="left", fontsize=9)
+
+
 def _retirement(ax, opt, t: Dict[str, str]) -> None:
     r = opt.retirement_index
     if r < opt.n_months:
@@ -107,6 +129,7 @@ def wealth(opt, t) -> Figure:
     ax.set_ylim(bottom=0)
     _euro(ax)
     _retirement(ax, opt, t)
+    _mark_out_of_money(ax, opt, t)
     ax.legend(loc="upper left")
     return fig
 
@@ -120,6 +143,7 @@ def consumption(opt, t) -> Figure:
     ax.set(title="Monthly consumption", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
+    _mark_out_of_money(ax, opt, t)
     ax.legend(loc="upper left", ncol=2)
     return fig
 
@@ -147,6 +171,7 @@ def holdings(opt, t) -> Figure:
     ax.set_ylim(bottom=0)
     _euro(ax)
     _retirement(ax, opt, t)
+    _mark_out_of_money(ax, opt, t)
     ax.legend(loc="upper left", ncol=2)
     return fig
 
@@ -180,6 +205,7 @@ def investment(opt, t) -> Figure:
     ax.set(title="Saving (+) / withdrawal (−), monthly average of each year", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
+    _mark_out_of_money(ax, opt, t)
     ax.legend(loc="lower left")
     return fig
 
@@ -243,7 +269,9 @@ def depletion(opt, t) -> Figure:
     ax.plot(risk["age"][ok], 100.0 * risk["low_wealth"][ok], color=BLUE,
             label="wealth below 6 months of fixed costs")
     ax.plot(risk["age"][ok], 100.0 * risk["shortfall"][ok], color=PURPLE, ls="--",
-            label="fixed costs cannot be paid")
+            label="fixed costs cannot be paid (this month)")
+    ax.plot(risk["age"][ok], 100.0 * risk["shortfall_ever"][ok], color=OUT_OF_MONEY, ls=":", lw=1.8,
+            label="⚠ out of money at least once so far")
     ax.set(title="Depletion risk (share of the paths alive at that age)", xlabel="Age", ylabel="%")
     ax.set_ylim(bottom=0)
     ax.text(0.99, 0.5, "the plan consumes the remaining\nwealth towards its end date", transform=ax.transAxes,

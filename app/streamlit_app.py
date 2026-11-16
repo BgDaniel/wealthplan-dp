@@ -92,8 +92,10 @@ FIGURE_HELP = {
                    "share dotted).",
     "09_regression": "Quality of the LSMC regression of the continuation value on the regression state "
                      "(Rürup capital / pension); median R² over the wealth grid per month.",
-    "10_depletion": "Among the paths alive: share with wealth below 6 months of fixed costs and share where the "
-                    "fixed costs cannot be paid. Rises towards the plan end because the plan consumes the rest.",
+    "10_depletion": "Among the paths alive: share with wealth below 6 months of fixed costs, share where the "
+                    "fixed costs cannot be paid this month, and share that has been out of money at least once "
+                    "(red dotted). Low wealth rises towards the plan end because the plan consumes the rest. In all "
+                    "figures the ages from which ≥ 5 % of the paths have been out of money are hatched red.",
     "11_taxes": "Taxes per year: capital gains tax on interest and ETF returns (median and 25–75 %), income tax "
                 "on pensions (incl. the Rürup part), Rürup tax refund as negative tax.",
     "12_ruerup": "Rürup contract capital on the simulated ETF paths until the pension start (median and bands) "
@@ -415,8 +417,14 @@ def result_page() -> None:
                 help=f'median over paths; 5 % quantile {_keur(summary["wealth_retirement_p05"])}')
     m[4].metric("Consumption in retirement", f'{summary["consumption_retired_median"]:,.0f} €',
                 help="median monthly consumption after retirement")
-    m[5].metric("Shortfall probability", _pct(summary["prob_shortfall"]),
-                help="share of paths where the fixed expenses could not be paid at least once")
+    age_oom = summary.get("out_of_money_age_5pct")
+    m[5].metric("Out of money", _pct(summary["prob_shortfall"]),
+                f"5 % of paths from age {age_oom:.0f}" if age_oom is not None and age_oom == age_oom else None,
+                delta_color="off",
+                help="share of paths where wealth + net cashflow could not pay the fixed costs at least once "
+                     "(the model then sets consumption and holdings to 0 and does not carry the gap as debt); "
+                     f"mean unpaid fixed costs {_eur(summary.get('unpaid_fixed_costs_mean', 0.0))}. "
+                     "Figures hatch the ages from which ≥ 5 % of the paths have been out of money.")
 
     fig_dir = run_dir / "figures"
     figures = sorted(fig_dir.glob("*.png"))
