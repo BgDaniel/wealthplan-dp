@@ -10,6 +10,7 @@ class PublicPensionPlan(PensionPlan):
     Represents a public (state) pension plan.
     """
     monthly_payout_brutto: float
+    name: str = "Public"
 
     def monthly_contribution(self, date: dt.date) -> float:
         return 0.0

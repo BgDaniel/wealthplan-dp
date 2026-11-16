@@ -4,6 +4,7 @@
 simulation_parameters:
   run_config_id: "lifecycle"
   initial_wealth: 145000.0
+  initial_equity: 0.0            # part of initial_wealth currently held in equity (rest: savings)
   start_date: 2026-01-01
   end_date: 2081-01-01
   retirement_date: 2055-07-01
@@ -81,6 +82,32 @@ total_pension:
 
   public_pension_plan:
     - monthly_payout_brutto: 3100
+
+  # Basisrente (Rürup): contributions until retirement, lifelong pension afterwards
+  ruerup_plans:
+    - name: "Rürup"
+      monthly_contribution: 600     # constant contribution (€/month)
+      contribution_growth: 0.0      # yearly increase (Dynamik)
+      start_date: 2026-01-01
+      expected_return: 0.06         # expected fund return p.a. before costs
+      running_costs: 0.012          # fund TER + contract costs p.a.
+      acquisition_costs: 0.04       # share of every contribution for acquisition / distribution
+      pension_factor: 28.0          # Rentenfaktor: €/month per 10 000 € capital
+      initial_capital: 0.0
+
+# ----------------------------
+# Taxes
+# ----------------------------
+tax:
+  capital_gains_tax_rate: 0.26375     # Abgeltungsteuer 25 % + Soli 5.5 % (add church tax if any)
+  equity_partial_exemption: 0.30      # Teilfreistellung equity ETFs
+  tax_savings_interest: true
+  tax_equity_returns: true
+  income_tax_mode: tariff             # tariff (§32a EStG 2025 + Soli) or flat
+  income_tax_rate_retirement: 0.20    # used with income_tax_mode: flat
+  marginal_tax_rate_working: 0.42     # Grenzsteuersatz: Rürup contributions are deducted at this rate
+  basis_pension_deduction_room: 11000 # remaining Basisvorsorge-Höchstbetrag per year after public pension contributions
+  pension_allowance_yearly: 102       # Werbungskosten-Pauschbetrag
 
 # ----------------------------
 # Stochastic model (LSMC)

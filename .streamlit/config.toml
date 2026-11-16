@@ -1,16 +1,15 @@
-# Dark black-blue theme (same as the BESS valuation app).
-# Layered surfaces: page #0b0f17 (near black, not pure black), sidebar #0e1420,
-# cards / inputs #141c2b, borders #1e2633; light-grey text; one accent blue used sparingly.
-# Chart colours: the categorical palette's dark steps, validated against the dark surface.
+# Dark navy / purple theme of the wealthplan app (app/streamlit_app.py), layout as in the
+# BESS valuation app. Surfaces: page #0c1226 (dark navy), sidebar #0f1630, cards / inputs
+# #151d38, borders #1f2747; light lavender-grey text; accent purple, series blue / purple.
 [theme]
 base = "dark"
-primaryColor = "#3987e5"
-backgroundColor = "#0b0f17"
-secondaryBackgroundColor = "#141c2b"
-textColor = "#e6e9ef"
-linkColor = "#6da7ec"
+primaryColor = "#a07aea"
+backgroundColor = "#0c1226"
+secondaryBackgroundColor = "#151d38"
+textColor = "#e7e9f5"
+linkColor = "#b9a0f2"
 linkUnderline = false
-borderColor = "#1e2633"
+borderColor = "#1f2747"
 showWidgetBorder = true
 showSidebarBorder = true
 baseRadius = "8px"
@@ -20,17 +19,15 @@ font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;70
 headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
 headingFontWeights = 600
 codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap, monospace"
-dataframeHeaderBackgroundColor = "#121a27"
-dataframeBorderColor = "#1e2633"
-blueColor = "#3987e5"
-greenColor = "#199e70"
-redColor = "#e66767"
-orangeColor = "#d95926"
-chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+dataframeHeaderBackgroundColor = "#131a33"
+dataframeBorderColor = "#1f2747"
+blueColor = "#2c6be0"
+violetColor = "#a07aea"
+chartCategoricalColors = ["#2c6be0", "#a07aea"]
 
 [theme.sidebar]
-backgroundColor = "#0e1420"
-secondaryBackgroundColor = "#141c2b"
+backgroundColor = "#0f1630"
+secondaryBackgroundColor = "#151d38"
 
 [client]
 toolbarMode = "viewer"

@@ -1,7 +1,9 @@
-"""Result figures of an ``LSMCBellmanOptimizer`` (matplotlib; dark theme like the BESS app).
+"""Result figures of an ``LSMCBellmanOptimizer`` (matplotlib; dark navy theme, blue / purple).
 
 Fans show the median with 25–75 % and 5–95 % bands over the out-of-sample paths alive at
-that age. One y-axis per chart.
+that age. One y-axis per chart. The two series colours (blue #2c6be0, purple #a07aea) pass
+the palette checks on the navy surface; as blue / purple stay close for colour-blind readers,
+two-series charts also differ in line style (solid / dashed) and carry direct labels.
 """
 
 from pathlib import Path
@@ -13,10 +15,10 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
-BLUE, ORANGE, GREEN, YELLOW, PINK, PURPLE = "#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"
+BLUE, PURPLE = "#2c6be0", "#a07aea"
 THEMES: Dict[str, Dict[str, str]] = {
-    "dark": {"bg": "#0b0f17", "fg": "#e6e9ef", "muted": "#9aa4b2", "grid": "#1e2633", "seq_low": "#141c2b"},
-    "light": {"bg": "#ffffff", "fg": "#1b2330", "muted": "#5b6573", "grid": "#e3e7ee", "seq_low": "#eef3fb"},
+    "dark": {"bg": "#0c1226", "fg": "#e7e9f5", "muted": "#9aa3c7", "grid": "#1f2747", "seq_low": "#151d38"},
+    "light": {"bg": "#ffffff", "fg": "#1b2040", "muted": "#5b6285", "grid": "#e3e6f2", "seq_low": "#eef1fb"},
 }
 
 
@@ -50,15 +52,31 @@ def _retirement(ax, opt, t: Dict[str, str]) -> None:
         ax.text(opt.age_grid[r], ax.get_ylim()[1], " retirement", color=t["muted"], va="top", fontsize=9)
 
 
-def _fan(ax, age: np.ndarray, data: np.ndarray, color: str, label: str) -> None:
-    """Median and bands of data (T, n_paths); NaN (dead) ignored, ages with < 20 paths skipped."""
+def _quantiles(data: np.ndarray) -> np.ndarray:
+    """5/25/50/75/95 % quantiles per month over the alive paths (NaN where < 20 paths)."""
     q = np.full((5, data.shape[0]), np.nan)
     valid = np.isfinite(data).sum(axis=1) >= 20
     if valid.any():
         q[:, valid] = np.nanpercentile(data[valid], (5, 25, 50, 75, 95), axis=1)
-    ax.fill_between(age, q[0], q[4], color=color, alpha=0.18, lw=0, label="5–95 %")
-    ax.fill_between(age, q[1], q[3], color=color, alpha=0.35, lw=0, label="25–75 %")
-    ax.plot(age, q[2], color=color, label=f"{label} (median)")
+    return q
+
+
+def _fan(ax, age: np.ndarray, data: np.ndarray, color: str, label: str, outer: bool = True, ls: str = "-") -> None:
+    """Median and bands of data (T, n_paths); NaN (dead) ignored, ages with < 20 paths skipped."""
+    q = _quantiles(data)
+    if outer:
+        ax.fill_between(age, q[0], q[4], color=color, alpha=0.16, lw=0, label="5–95 %")
+    ax.fill_between(age, q[1], q[3], color=color, alpha=0.32, lw=0, label=f"{label}: 25–75 %" if not outer
+                    else "25–75 %")
+    ax.plot(age, q[2], color=color, ls=ls, label=f"{label} (median)")
+
+
+def _label_end(ax, age: np.ndarray, data: np.ndarray, text: str, color: str, t) -> None:
+    """Direct label at the median's peak (secondary encoding next to the colour)."""
+    med = _quantiles(data)[2]
+    if np.isfinite(med).any():
+        i = int(np.nanargmax(np.abs(med)))
+        ax.annotate(text, (age[i], med[i]), xytext=(6, 6), textcoords="offset points", color=t["fg"], fontsize=9)
 
 
 def wealth(opt, t) -> Figure:
@@ -74,8 +92,8 @@ def wealth(opt, t) -> Figure:
 
 def consumption(opt, t) -> Figure:
     fig, ax = plt.subplots(figsize=(11, 4.6))
-    _fan(ax, opt.age_grid, opt.opt_consumption.values, GREEN, "Consumption")
-    ax.plot(opt.age_grid, opt.cf, color=ORANGE, lw=1.5, label="Net cashflow (income − fixed costs)")
+    _fan(ax, opt.age_grid, opt.opt_consumption.values, PURPLE, "Consumption")
+    ax.plot(opt.age_grid, opt.cf, color=t["muted"], lw=1.3, ls="--", label="Net cashflow (income − fixed costs)")
     ax.set(title="Monthly consumption", xlabel="Age")
     _euro(ax)
     _retirement(ax, opt, t)
@@ -93,14 +111,37 @@ def equity_share(opt, t) -> Figure:
     return fig
 
 
-def equity_amount(opt, t) -> Figure:
+def holdings(opt, t) -> Figure:
+    """Amount held in equity and in the savings account after rebalancing (median, 25–75 %)."""
+    eq = opt.opt_equity_share.values * opt.opt_invested.values
+    sav = opt.opt_invested.values - eq
     fig, ax = plt.subplots(figsize=(11, 4.6))
-    _fan(ax, opt.age_grid, opt.opt_equity_share.values * opt.opt_invested.values, ORANGE, "Amount in equity")
-    ax.set(title="Amount invested in equity", xlabel="Age")
+    _fan(ax, opt.age_grid, eq, BLUE, "Equity", outer=False)
+    _fan(ax, opt.age_grid, sav, PURPLE, "Savings account", outer=False, ls="--")
+    _label_end(ax, opt.age_grid, eq, "equity", BLUE, t)
+    _label_end(ax, opt.age_grid, sav, "savings", PURPLE, t)
+    ax.set(title="Holdings: equity vs. savings account", xlabel="Age")
     ax.set_ylim(bottom=0)
     _euro(ax)
     _retirement(ax, opt, t)
-    ax.legend(loc="upper left")
+    ax.legend(loc="upper left", ncol=2)
+    return fig
+
+
+def flows(opt, t) -> Figure:
+    """Monthly purchases (+) / sales (−) per asset: target holding minus holding before rebalancing."""
+    eq = opt.opt_equity_share.values * opt.opt_invested.values
+    sav = opt.opt_invested.values - eq
+    buy_eq = eq - opt.opt_equity_before.values
+    buy_sav = sav - opt.opt_savings_before.values
+    fig, ax = plt.subplots(figsize=(11, 4.6))
+    _fan(ax, opt.age_grid[1:], buy_eq[1:], BLUE, "Equity", outer=False)
+    _fan(ax, opt.age_grid[1:], buy_sav[1:], PURPLE, "Savings account", outer=False, ls="--")
+    ax.axhline(0.0, color=t["muted"], lw=1.0)
+    ax.set(title="Monthly investment per asset: buy (+) / sell (−)", xlabel="Age")
+    _euro(ax)
+    _retirement(ax, opt, t)
+    ax.legend(loc="lower left", ncol=2)
     return fig
 
 
@@ -126,7 +167,8 @@ def equity_policy(opt, t) -> Figure:
     fig, ax = plt.subplots(figsize=(11, 4.6))
     mesh = ax.pcolormesh(opt.age_grid[months], w_axis, 100.0 * z, shading="auto", cmap=_sequential(t), vmin=0,
                          vmax=100, rasterized=True)
-    ax.plot(opt.age_grid, np.nanmedian(invested, axis=1), color=ORANGE, lw=1.5, label="median invested wealth")
+    ax.plot(opt.age_grid, np.nanmedian(invested, axis=1), color=PURPLE, lw=1.6, ls="--",
+            label="median invested wealth")
     cb = fig.colorbar(mesh, ax=ax, pad=0.01)
     cb.set_label("equity share [%]")
     cb.outline.set_visible(False)
@@ -140,7 +182,7 @@ def equity_policy(opt, t) -> Figure:
 
 def survival(opt, t) -> Figure:
     fig, ax = plt.subplots(figsize=(11, 4.0))
-    ax.plot(opt.age_grid, 100.0 * opt.survival_probabilities, color=PINK, label="model")
+    ax.plot(opt.age_grid, 100.0 * opt.survival_probabilities, color=PURPLE, label="model")
     ax.plot(opt.age_grid, 100.0 * opt.survival_paths.mean(axis=0), color=t["muted"], lw=1.0, ls=":",
             label="simulated")
     ax.set(title="Probability to be alive", xlabel="Age", ylabel="%")
@@ -159,7 +201,7 @@ def regression(opt, t) -> Figure:
         ax.text(0.5, 0.5, "regression degree 0: constant basis = Monte Carlo mean (no R²)",
                 transform=ax.transAxes, ha="center", va="center", color=t["muted"])
         return fig
-    ax.plot(ages, [opt.r_squared[m] for m in months], color=YELLOW)
+    ax.plot(ages, [opt.r_squared[m] for m in months], color=BLUE)
     return fig
 
 
@@ -167,11 +209,12 @@ FIGURES: Dict[str, Tuple[str, Callable]] = {
     "01_wealth": ("Wealth", wealth),
     "02_consumption": ("Consumption", consumption),
     "03_equity_share": ("Equity share", equity_share),
-    "04_equity_amount": ("Equity amount", equity_amount),
-    "05_saving": ("Saving / withdrawal", investment),
-    "06_equity_policy": ("Equity policy", equity_policy),
-    "07_survival": ("Survival", survival),
-    "08_regression": ("Regression R²", regression),
+    "04_holdings": ("Equity vs. savings", holdings),
+    "05_flows": ("Monthly investment", flows),
+    "06_saving": ("Saving / withdrawal", investment),
+    "07_equity_policy": ("Equity policy", equity_policy),
+    "08_survival": ("Survival", survival),
+    "09_regression": ("Regression R²", regression),
 }
 
 

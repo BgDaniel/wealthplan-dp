@@ -17,6 +17,8 @@ from wealthplan.cashflows.pension.private_pension_plans.private_pension_plan_dyn
     PrivatePensionPlanDynamic,
 )
 from wealthplan.cashflows.pension.public_pension_plan import PublicPensionPlan
+from wealthplan.cashflows.pension.ruerup_pension import RuerupPension
+from wealthplan.tax.tax_model import TaxModel
 
 
 # ----------------------
@@ -71,6 +73,12 @@ KEY_START_DATE_PLAN: str = "start_date"
 KEY_CURRENT_AGE: str = "current_age"
 KEY_BETA: str = "beta"
 
+KEY_INITIAL_EQUITY: str = "initial_equity"
+KEY_TAX: str = "tax"
+KEY_SAVINGS_TAX_RATE: str = "savings_tax_rate"
+KEY_EQUITY_TAX_RATE: str = "equity_tax_rate"
+KEY_RUERUP_PLANS: str = "ruerup_plans"
+
 KEY_TECHNICAL: str = "technical"
 KEY_USE_CACHE: str = "use_cache"
 KEY_UTILITY_FUNCTION: str = "utility_function"
@@ -118,10 +126,12 @@ class ConfigMapper:
         # Base simulation parameters
         sim: Dict[str, Any] = data[KEY_SIMULATION]
 
+        tax = TaxModel.from_dict(data.get(KEY_TAX))
+
         cashflows: List[CashflowBase] = []
         cashflows.extend(cls._load_lifecycle_cashflows(data))
         cashflows.extend(cls._load_insurances(data))
-        cashflows.extend(cls._load_total_pension(data))
+        cashflows.extend(cls._load_total_pension(data, tax))
 
         params: Dict[str, Any] = {
             KEY_RUN_CONFIG_ID: sim[KEY_RUN_CONFIG_ID],
@@ -131,8 +141,11 @@ class ConfigMapper:
             KEY_INITIAL_WEALTH: sim[KEY_INITIAL_WEALTH],
             KEY_YEARLY_RETURN_SAVINGS: sim[KEY_YEARLY_RETURN_SAVINGS],
             KEY_CURRENT_AGE: float(sim[KEY_CURRENT_AGE]),
+            KEY_INITIAL_EQUITY: float(sim.get(KEY_INITIAL_EQUITY, 0.0)),
             KEY_BETA: float(sim[KEY_BETA]),
             KEY_CASHFLOWS: cashflows,
+            KEY_SAVINGS_TAX_RATE: tax.savings_tax_rate,
+            KEY_EQUITY_TAX_RATE: tax.equity_tax_rate,
         }
 
         # ----------------------
@@ -188,12 +201,13 @@ class ConfigMapper:
     # Pension handling
     # ----------------------
     @staticmethod
-    def _load_total_pension(data: Dict[str, Any]) -> List[CashflowBase]:
+    def _load_total_pension(data: Dict[str, Any], tax: TaxModel) -> List[CashflowBase]:
         """
         Create an aggregated TotalPension cashflow from all pension plans.
 
         Args:
             data: Parsed YAML configuration.
+            tax: Tax parameters (pension income tax, Rürup refund).
 
         Returns:
             List containing a single TotalPension instance,
@@ -203,7 +217,7 @@ class ConfigMapper:
         if not cfg:
             return []
 
-        retirement_date: str = cfg[KEY_RETIREMENT_DATE]
+        retirement_date = cfg[KEY_RETIREMENT_DATE]
         pension_plans: List[CashflowBase] = []
 
         # Private pension plans
@@ -238,7 +252,24 @@ class ConfigMapper:
                 )
             )
 
-        return [TotalPension(pensions=pension_plans, retirement_date=retirement_date)]
+        # Basisrente (Rürup): contributions until, payout from the retirement date
+        for p in cfg.get(KEY_RUERUP_PLANS, []):
+            pension_plans.append(
+                RuerupPension(
+                    name=p.get(KEY_NAME, "Rürup"),
+                    monthly_contribution_amount=float(p["monthly_contribution"]),
+                    start_date=p.get(KEY_START_DATE_PLAN, data[KEY_SIMULATION][KEY_START_DATE]),
+                    pension_start=retirement_date,
+                    contribution_growth=float(p.get("contribution_growth", 0.0)),
+                    expected_return=float(p.get("expected_return", 0.06)),
+                    running_costs=float(p.get("running_costs", 0.012)),
+                    acquisition_costs=float(p.get("acquisition_costs", 0.04)),
+                    pension_factor=float(p.get("pension_factor", 28.0)),
+                    initial_capital=float(p.get("initial_capital", 0.0)),
+                )
+            )
+
+        return [TotalPension(pensions=pension_plans, retirement_date=retirement_date, tax=tax)]
 
     @staticmethod
     def _load_crra_params(data: Dict[str, Any]) -> Dict[str, float]:

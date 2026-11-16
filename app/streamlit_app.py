@@ -6,6 +6,8 @@ Start from the repository root:
     poetry run streamlit run app/streamlit_app.py
 
 Pages
+* Steering: what to do this month: income, fixed costs, allowed consumption and how much to
+  buy / sell of equity and savings account, given the current holdings.
 * Runs: pick a stored configuration, optionally override the simulation sizes, start now or
   schedule a start time. Runs compute in background processes (wealthplan.jobs); the table
   shows all runs with progress, remaining time, key figures and a link to the result.
@@ -17,6 +19,7 @@ Pages
 from __future__ import annotations
 
 import copy
+import dataclasses
 import datetime as dt
 import json
 import shutil
@@ -25,16 +28,25 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+import numpy as np
 import pandas as pd
 import streamlit as st
+import yaml
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from config.stochastic.lsmc.lsmc_config_mapper import TECHNICAL_DEFAULTS, LSMCConfigMapper  # noqa: E402
+from wealthplan.tax.tax_model import TaxModel  # noqa: E402
 from wealthplan.catalog import DEFAULT_PARAMS_DIR, delete_config, list_configs, load_config, save_config  # noqa: E402
 from wealthplan.jobs import (DEFAULT_JOBS_ROOT, cancel_job, delete_job, list_jobs, read_status,  # noqa: E402
                              submit_job)
+from wealthplan.optimizer.stochastic.lsmc.lsmc_bellman_optimizer import decide  # noqa: E402
+from wealthplan.plots import BLUE, PURPLE, THEMES  # noqa: E402
 
 PARAMS_DIR = ROOT / DEFAULT_PARAMS_DIR
 JOBS_ROOT = ROOT / DEFAULT_JOBS_ROOT
@@ -46,25 +58,32 @@ FIGURE_TITLES = {
     "01_wealth": "Wealth",
     "02_consumption": "Consumption",
     "03_equity_share": "Equity share",
-    "04_equity_amount": "Equity amount",
-    "05_saving": "Saving / withdrawal",
-    "06_equity_policy": "Equity policy",
-    "07_survival": "Survival",
-    "08_regression": "Regression R²",
+    "04_holdings": "Equity vs. savings",
+    "05_flows": "Monthly investment",
+    "06_saving": "Saving / withdrawal",
+    "07_equity_policy": "Equity policy",
+    "08_survival": "Survival",
+    "09_regression": "Regression R²",
 }
 
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
 CSS = """
 <style>
   .block-container {padding-top: 2.4rem; max-width: 1440px;}
-  .page-kicker {color: #6da7ec; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em;
+  .page-kicker {color: #b9a0f2; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em;
                 text-transform: uppercase; margin-bottom: -0.4rem;}
-  .page-subtitle {color: #9aa4b2; margin: -0.5rem 0 1.6rem 0;}
-  .facts {color: #9aa4b2; font-size: 0.86rem; line-height: 1.55;}
-  .facts b {color: #e6e9ef; font-weight: 500;}
-  div[data-testid="stMetric"] {background: #121a27; border: 1px solid #1e2633;
+  .page-subtitle {color: #9aa3c7; margin: -0.5rem 0 1.6rem 0;}
+  .facts {color: #9aa3c7; font-size: 0.86rem; line-height: 1.55;}
+  .facts b {color: #e7e9f5; font-weight: 500;}
+  div[data-testid="stMetric"] {background: #131a33; border: 1px solid #1f2747;
                                border-radius: 10px; padding: 0.9rem 1.1rem;}
-  div[data-testid="stMetricLabel"] p {color: #9aa4b2; font-size: 0.8rem;}
+  div[data-testid="stMetricLabel"] p {color: #9aa3c7; font-size: 0.8rem;}
+  .action {background: #131a33; border: 1px solid #1f2747; border-left: 4px solid #a07aea;
+           border-radius: 10px; padding: 0.9rem 1.1rem; margin-bottom: 0.6rem;}
+  .action.equity {border-left-color: #2c6be0;}
+  .action .label {color: #9aa3c7; font-size: 0.8rem;}
+  .action .value {color: #e7e9f5; font-size: 1.6rem; font-weight: 600;}
+  .action .detail {color: #9aa3c7; font-size: 0.85rem;}
 </style>
 """
 
@@ -296,6 +315,127 @@ def result_page() -> None:
             st.code((run_dir / "params.yaml").read_text(encoding="utf-8"), language="yaml")
 
 
+# ------------------------------------------------------------------ page: steering
+
+
+def _eur(value: float) -> str:
+    return f"{value:,.0f} €"
+
+
+def _trade(amount: float) -> str:
+    if abs(amount) < 0.5:
+        return "no change"
+    return f"buy {_eur(amount)}" if amount > 0 else f"sell {_eur(-amount)}"
+
+
+def _action(label: str, value: str, detail: str, kind: str = "") -> str:
+    return (f'<div class="action {kind}"><div class="label">{label}</div><div class="value">{value}</div>'
+            f'<div class="detail">{detail}</div></div>')
+
+
+def _allocation_figure(current: tuple[float, float], target: tuple[float, float]):
+    t = THEMES["dark"]
+    fig, ax = plt.subplots(figsize=(6.2, 2.5))
+    fig.patch.set_facecolor(t["bg"])
+    ax.set_facecolor(t["bg"])
+    rows = ["target", "now"]
+    for i, (eq, sav) in enumerate((target, current)):
+        ax.barh(i, eq, color=BLUE, height=0.55, label="equity" if i == 0 else None)
+        ax.barh(i, sav, left=eq, color=PURPLE, height=0.55, hatch="//", edgecolor=t["bg"],
+                label="savings account" if i == 0 else None)
+        total = eq + sav
+        ax.text(total, i, f"  {_eur(total)}", va="center", color=t["fg"], fontsize=9)
+    ax.set_yticks(range(2), rows, color=t["muted"])
+    ax.tick_params(axis="x", colors=t["muted"])
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v / 1e3:,.0f} k€"))
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(t["grid"])
+    ax.grid(axis="x", color=t["grid"], lw=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False, labelcolor=t["fg"],
+              fontsize=9)
+    ax.set_xlim(0, max(sum(current), sum(target), 1.0) * 1.22)
+    fig.tight_layout()
+    return fig
+
+
+def steering_page() -> None:
+    """What to do this month: cashflows, allowed consumption, buy / sell per asset."""
+    done = [j for j in list_jobs(JOBS_ROOT) if j["state"] == "done"
+            and (Path(j["run_dir"]) / "policy.npz").exists()]
+    if not done:
+        _header("Optimisation", "Steering", "No finished run yet – schedule one on the Runs page.")
+        return
+    labels = {j["id"]: f"{j['name']} · {j['id']}" for j in done}
+    c_run, c_month = st.columns([2, 1])
+    chosen = c_run.selectbox("Run", list(labels), format_func=labels.get)
+    run_dir = Path(read_status(JOBS_ROOT / chosen)["run_dir"])
+    with np.load(run_dir / "policy.npz") as f:
+        policy = {k: f[k] for k in f.files}
+    months = [date.fromisoformat(str(m)) for m in policy["months"]]
+    this_month = date.today().replace(day=1)
+    default = months.index(this_month) if this_month in months else 0
+    month = c_month.selectbox("Month", months, index=default, format_func=lambda d: d.strftime("%m/%Y"))
+    t = months.index(month)
+    items = pd.read_csv(run_dir / "cashflows.csv", index_col=0).iloc[t]
+    quant = pd.read_csv(run_dir / "quantiles.csv", index_col=0).iloc[t]
+    params = yaml.safe_load((run_dir / "params.yaml").read_text(encoding="utf-8"))
+
+    _header("Steering", f"{month:%B %Y}", "What to do this month: given your current holdings the optimal "
+            "policy of the run says how much you may consume and how much to buy or sell of equity and "
+            "savings account. Fixed costs include insurances and pension contributions.")
+
+    if t == 0:
+        eq_default = float(params["simulation_parameters"].get("initial_equity", 0.0))
+        sav_default = float(params["simulation_parameters"]["initial_wealth"]) - eq_default
+    else:
+        eq_default = float(quant.get("equity_before_p50", 0.0))
+        sav_default = float(quant.get("savings_before_p50", 0.0))
+    with st.container(border=True):
+        st.subheader("Your holdings at the start of the month")
+        c1, c2, c3 = st.columns(3)
+        eq_now = c1.number_input("Equity (ETFs) [€]", value=round(max(eq_default, 0.0), -2), min_value=0.0,
+                                 step=1000.0)
+        sav_now = c2.number_input("Savings account [€]", value=round(max(sav_default, 0.0), -2), min_value=0.0,
+                                  step=1000.0)
+        c3.markdown(f'<div class="facts">Defaults: {"configuration" if t == 0 else "median of the simulated paths"}'
+                    f'<br>Total <b>{_eur(eq_now + sav_now)}</b></div>', unsafe_allow_html=True)
+
+    d = decide(policy, t, eq_now + sav_now)
+    income = float(items[items > 0].sum())
+    fixed = float(-items[items < 0].sum())
+
+    m = st.columns(4)
+    m[0].metric("Income", _eur(income), help="salary / pensions / tax refunds of this month")
+    m[1].metric("Fixed costs", _eur(fixed), help="rent, living costs, insurances, contributions, taxes")
+    m[2].metric("Net cashflow", _eur(d["net_cashflow"]), help="income − fixed costs")
+    m[3].metric("Consumption allowed", _eur(d["consumption"]),
+                help="optimal discretionary consumption on top of the fixed costs")
+
+    left, right = st.columns([1, 1.15], gap="large")
+    with left:
+        st.subheader("Actions")
+        if d["shortfall"] > 0:
+            st.error(f"The fixed costs exceed income and wealth by {_eur(d['shortfall'])}.")
+        st.markdown(_action("Equity (ETFs)", _trade(d["equity"] - eq_now),
+                            f"target {_eur(d['equity'])} · {100 * d['equity_share']:.0f} % of the invested "
+                            f"wealth", "equity"), unsafe_allow_html=True)
+        st.markdown(_action("Savings account", _trade(d["savings"] - sav_now),
+                            f"target {_eur(d['savings'])} · {100 * (1 - d['equity_share']):.0f} % of the invested "
+                            f"wealth"), unsafe_allow_html=True)
+        st.markdown(_action("Invested after this month", _eur(d["invested"]),
+                            f"holdings {_eur(eq_now + sav_now)} + net cashflow {_eur(d['net_cashflow'])} − "
+                            f"consumption {_eur(d['consumption'])}"), unsafe_allow_html=True)
+        st.pyplot(_allocation_figure((eq_now, sav_now), (d["equity"], d["savings"])), width="stretch")
+    with right:
+        st.subheader("Cashflows of the month")
+        table = pd.DataFrame({"Item": items.index, "Amount [€]": items.values})
+        table = table[table["Amount [€]"].abs() > 0.005].sort_values("Amount [€]", ascending=False)
+        st.dataframe(table, hide_index=True, width="stretch", height=min(38 + 35 * len(table), 640),
+                     column_config={"Amount [€]": st.column_config.NumberColumn(format="%.2f")})
+
+
 # ------------------------------------------------------------------ page: configurations
 
 PRIVATE_COLUMNS = ["name", "monthly_contribution", "monthly_payout_brutto", "taxable_earnings_share",
@@ -340,6 +480,35 @@ def _private_plans(frame: pd.DataFrame, default_start: date) -> list[dict]:
     return plans
 
 
+RUERUP_COLUMNS = ["name", "monthly_contribution", "contribution_growth", "start_date", "expected_return",
+                  "running_costs", "acquisition_costs", "pension_factor", "initial_capital"]
+RUERUP_DEFAULTS = {"contribution_growth": 0.0, "expected_return": 0.06, "running_costs": 0.012,
+                   "acquisition_costs": 0.04, "pension_factor": 28.0, "initial_capital": 0.0}
+
+
+def _ruerup_frame(plans: list[dict], default_start: date) -> pd.DataFrame:
+    rows = [{"name": p.get("name", "Rürup"), "monthly_contribution": float(p["monthly_contribution"]),
+             **{k: float(p.get(k, v)) for k, v in RUERUP_DEFAULTS.items()},
+             "start_date": _as_date(p.get("start_date", default_start))} for p in plans]
+    return pd.DataFrame(rows, columns=RUERUP_COLUMNS)
+
+
+def _ruerup_plans(frame: pd.DataFrame, default_start: date) -> list[dict]:
+    plans = []
+    for r in frame.to_dict("records"):
+        if not r.get("name") or r.get("monthly_contribution") is None or r["monthly_contribution"] != \
+                r["monthly_contribution"]:
+            continue
+        start = r.get("start_date")
+        plan = {"name": r["name"], "monthly_contribution": float(r["monthly_contribution"]),
+                "start_date": default_start if start is None or start != start else _as_date(start)}
+        for k, v in RUERUP_DEFAULTS.items():
+            value = r.get(k)
+            plan[k] = float(v if value is None or value != value else value)
+        plans.append(plan)
+    return plans
+
+
 def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
     sim = data["simulation_parameters"]
     life = data.get("lifecycle", {})
@@ -348,11 +517,13 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
     surv = sto["survival_model"]
     tech = {**TECHNICAL_DEFAULTS, **data.get("technical", {})}
     util = data.get("utility_function", {})
+    tax = {**dataclasses.asdict(TaxModel()), **data.get("tax", {})}
 
     with st.form(f"config_{name}", border=True):
         new_name = st.text_input("Name", name, help="file name in params/: letters, digits, _ - .")
-        tab_sim, tab_cf, tab_pen, tab_mkt, tab_num = st.tabs(
-            ["Person & horizon", "Income & expenses", "Pensions", "Market & mortality", "Preferences & numerics"])
+        tab_sim, tab_cf, tab_pen, tab_tax, tab_mkt, tab_num = st.tabs(
+            ["Person & horizon", "Income & expenses", "Pensions", "Taxes", "Market & mortality",
+             "Preferences & numerics"])
 
         with tab_sim:
             c1, c2, c3, c4 = st.columns(4)
@@ -367,6 +538,9 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                       step=0.25, format="%.2f")
             beta = c3.number_input("Monthly discount factor β", value=float(sim["beta"]), min_value=0.9,
                                    max_value=1.0, step=0.0005, format="%.4f")
+            equity0 = c4.number_input("thereof in equity [€]", value=float(sim.get("initial_equity", 0.0)),
+                                      min_value=0.0, step=5000.0,
+                                      help="part of the initial wealth currently held in equity; rest: savings")
 
         with tab_cf:
             c1, c2, c3 = st.columns(3)
@@ -397,6 +571,40 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                      value=float(sum(p["monthly_payout_brutto"]
                                                      for p in pension.get("public_pension_plan", []))),
                                      min_value=0.0, step=50.0)
+            st.caption("Basisrente (Rürup): contributions until retirement (tax deductible), lifelong pension "
+                       "= capital / 10 000 × pension factor, taxed with the Besteuerungsanteil. Rates as "
+                       "fractions (0.06 = 6 %).")
+            ruerup = st.data_editor(_ruerup_frame(pension.get("ruerup_plans", []), _as_date(sim["start_date"])),
+                                    num_rows="dynamic", width="stretch", key=f"rue_{name}",
+                                    column_config={"start_date": st.column_config.DateColumn("start_date")})
+
+        with tab_tax:
+            c1, c2, c3 = st.columns(3)
+            cg_rate = c1.number_input("Capital gains tax [%]", value=100 * float(tax["capital_gains_tax_rate"]),
+                                      min_value=0.0, max_value=60.0, step=0.25, format="%.3f",
+                                      help="Abgeltungsteuer 25 % + Soli 5.5 % = 26.375 % (+ church tax)")
+            exemption = c2.number_input("Partial exemption equity [%]",
+                                        value=100 * float(tax["equity_partial_exemption"]), min_value=0.0,
+                                        max_value=100.0, step=5.0, help="Teilfreistellung equity ETFs: 30 %")
+            tax_int = c3.toggle("Tax interest", value=bool(tax["tax_savings_interest"]))
+            tax_eq = c3.toggle("Tax equity returns", value=bool(tax["tax_equity_returns"]),
+                               help="taxed when the return accrues (simplification, see README)")
+            mode = c1.selectbox("Income tax on pensions", ["tariff", "flat"],
+                                index=0 if tax["income_tax_mode"] == "tariff" else 1,
+                                format_func={"tariff": "§32a tariff 2025 + Soli", "flat": "flat rate"}.get)
+            flat = c2.number_input("Flat tax rate in retirement [%]",
+                                   value=100 * float(tax["income_tax_rate_retirement"]), min_value=0.0,
+                                   max_value=60.0, step=1.0, help="used with “flat rate”")
+            marginal = c1.number_input("Marginal tax rate while working [%]",
+                                       value=100 * float(tax["marginal_tax_rate_working"]), min_value=0.0,
+                                       max_value=47.5, step=1.0,
+                                       help="Grenzsteuersatz: Rürup contributions are deducted at this rate")
+            room = c2.number_input("Basisvorsorge deduction room [€/year]",
+                                   value=float(tax["basis_pension_deduction_room"]), min_value=0.0, step=500.0,
+                                   help="Höchstbetrag (2025: 29 344 €) minus employee + employer contributions "
+                                        "to the public pension")
+            allowance = c3.number_input("Pension allowance [€/year]", value=float(tax["pension_allowance_yearly"]),
+                                        min_value=0.0, step=10.0, help="Werbungskosten-Pauschbetrag (102 €)")
 
         with tab_mkt:
             c1, c2, c3, c4 = st.columns(4)
@@ -439,9 +647,9 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
     if saved:
         new = copy.deepcopy(data)
         new["simulation_parameters"] = {
-            "run_config_id": new_name.strip(), "initial_wealth": wealth0, "start_date": start, "end_date": end,
-            "retirement_date": retirement, "current_age": age, "yearly_return_savings": savings / 100.0,
-            "beta": beta}
+            "run_config_id": new_name.strip(), "initial_wealth": wealth0, "initial_equity": min(equity0, wealth0),
+            "start_date": start, "end_date": end, "retirement_date": retirement, "current_age": age,
+            "yearly_return_savings": savings / 100.0, "beta": beta}
         lifecycle: dict[str, Any] = {}
         if salary > 0:
             lifecycle["salary"] = {"monthly_amount": salary, "retirement_date": retirement}
@@ -454,7 +662,13 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
         new["lifecycle"] = lifecycle
         new["total_pension"] = {"retirement_date": retirement,
                                 "private_pension_plans": _private_plans(private, start),
-                                "public_pension_plan": [{"monthly_payout_brutto": public}] if public > 0 else []}
+                                "public_pension_plan": [{"monthly_payout_brutto": public}] if public > 0 else [],
+                                "ruerup_plans": _ruerup_plans(ruerup, start)}
+        new["tax"] = {"capital_gains_tax_rate": cg_rate / 100.0, "equity_partial_exemption": exemption / 100.0,
+                      "tax_savings_interest": bool(tax_int), "tax_equity_returns": bool(tax_eq),
+                      "income_tax_mode": mode, "income_tax_rate_retirement": flat / 100.0,
+                      "marginal_tax_rate_working": marginal / 100.0, "basis_pension_deduction_room": room,
+                      "pension_allowance_yearly": allowance}
         new["stochastic"] = {"yearly_return": mu / 100.0, "sigma": sigma / 100.0, "n_sims": int(n_sims),
                              "n_sims_oos": int(n_oos), "seed": int(seed),
                              "survival_model": {"b": b, "c": c, "seed": int(surv_seed)}}
@@ -538,6 +752,7 @@ def main() -> None:
         st.caption("Lifecycle consumption and equity share (LSMC Bellman)")
     nav = st.navigation({
         "Optimisation": [
+            st.Page(steering_page, title="Steering", icon=":material/explore:", url_path="steering"),
             st.Page(runs_page, title="Runs", icon=":material/play_circle:", url_path="runs", default=True),
             st.Page(result_page, title="Result", icon=":material/insights:", url_path="result"),
         ],

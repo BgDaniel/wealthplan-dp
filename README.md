@@ -2,8 +2,8 @@
 
 Stochastic lifecycle planning: a least-squares Monte Carlo (LSMC) Bellman optimizer for the
 monthly **consumption** and the **equity share** of the invested wealth, given salary, fixed
-expenses, insurances, pensions (with tax) and Gompertz mortality. Equity follows a GBM, the
-rest earns a risk-free savings rate.
+expenses, insurances, pensions incl. a Basisrente (Rürup), German taxes and Gompertz mortality.
+Equity (ETF) follows a GBM, the rest earns a risk-free savings rate.
 
 ## Setup
 
@@ -18,12 +18,15 @@ poetry run python -m unittest discover -s backend/test -t backend -v
 poetry run streamlit run app/streamlit_app.py
 ```
 
+* **Steering**: the current month: income, fixed costs (itemised), allowed consumption and
+  how much to buy / sell of equity and savings account given your current holdings.
 * **Runs**: pick a configuration, adjust the number of paths, start now or at a scheduled
   time. Runs compute in background processes (`results/_jobs/`), at most *n* in parallel;
   the table shows progress, remaining time and key figures.
 * **Result**: key figures, figures (wealth, consumption, equity share, equity amount,
   saving/withdrawal, equity policy map, survival, regression R²), runtimes, downloads.
-* **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete).
+* **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete), incl.
+  Rürup plans and the tax parameters.
   Saving from the app rewrites the file without comments.
 * **Cache**: cached regression coefficients; clear the cache.
 
@@ -34,7 +37,8 @@ poetry run python -m wealthplan.run params/lifecycle_params.yaml
 ```
 
 writes `results/<timestamp>_<run_config_id>/` with `summary.json`, `quantiles.csv`,
-`params.yaml` and `figures/*.png`. In Python:
+`cashflows.csv` (items per month), `policy.npz` (for `decide`), `params.yaml` and
+`figures/*.png`. In Python:
 
 ```python
 import yaml
@@ -82,6 +86,29 @@ hash covers every parameter of the backward induction plus a solver version, but
 the run name, the number of out-of-sample paths or the mortality seed. Repeated runs
 only redo the forward simulation.
 
+## Taxes (`wealthplan.tax.TaxModel`, YAML section `tax`)
+
+* **Capital gains**: Abgeltungsteuer incl. Soli (26.375 %, configurable) on interest and on
+  equity returns after the Teilfreistellung (30 %), charged when the return accrues (monthly,
+  losses credited at once). Simplification: ignores the deferral advantage of unrealised gains
+  and the Sparer-Pauschbetrag (slightly pessimistic for equity).
+* **Pensions**: taxable part = Besteuerungsanteil of the retirement year for the public pension
+  and the Rürup pension (2023 82.5 %, +0.5 %-points per year, 100 % from 2058),
+  `taxable_earnings_share` (Ertragsanteil) for private, 1.0 for company pensions; minus
+  102 € Pauschbetrag; tax by the §32a EStG 2025 tariff + Soli or a flat configurable rate.
+* **Rürup contributions** are deducted at the configurable marginal tax rate while working,
+  up to the remaining Basisvorsorge room (Höchstbetrag minus public pension contributions);
+  the refund is booked monthly.
+* Not modelled: health / long-term care insurance of pensioners, church tax (add it to the
+  capital gains rate), Vorabpauschale.
+
+## Rürup (`ruerup_plans` under `total_pension`)
+
+Constant (or growing) monthly contribution until retirement; each contribution minus the
+acquisition costs is invested at the expected fund return minus the running costs
+(deterministic); monthly pension = capital / 10 000 × pension factor (Rentenfaktor), lifelong,
+no death benefit.
+
 ## Layout
 
 ```
@@ -90,7 +117,8 @@ params/                         YAML configurations
 backend/src/config/             YAML -> optimizer arguments (ConfigMapper, LSMCConfigMapper)
 backend/src/result_cache/       per-month result cache keyed by parameter hash
 backend/src/wealthplan/
-  cashflows/                    salary, rent, groceries, insurances, pensions (+ tax)
+  cashflows/                    salary, rent, groceries, insurances, pensions, Rürup
+  tax/                          TaxModel: capital gains, pension income tax, Rürup refund
   optimizer/stochastic/lsmc/    LSMCBellmanOptimizer and its Numba kernels
   optimizer/stochastic/...      GBM, Gompertz survival, WealthRegressor
   run.py, plots.py, jobs.py     CLI / result folder, figures, background runs

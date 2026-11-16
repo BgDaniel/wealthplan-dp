@@ -89,10 +89,12 @@ class TestLSMCBellmanOptimizer(unittest.TestCase):
     """End-to-end runs on a short horizon."""
 
     def test_solve_and_summary(self) -> None:
-        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(small_params()))
+        # a coarse wealth grid biases the in-sample value downwards (interpolation of the concave
+        # value function), so this test uses the default grid density
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(small_params(n_wealth=200)))
         opt.solve()
         summary = opt.summary()
-        self.assertEqual(opt.opt_wealth.shape, (opt.n_months, 300))
+        self.assertEqual(opt.opt_wealth.shape, (opt.n_months, 300))  # noqa: E501
         self.assertTrue(0.0 <= summary["equity_share_start"] <= 1.0)
         self.assertGreater(summary["consumption_start"], 0.0)
         alive = opt.survival_paths.T > 0
@@ -143,6 +145,31 @@ class TestLSMCBellmanOptimizer(unittest.TestCase):
         self.assertEqual(a["params_hash"], b["params_hash"])
         opt = LSMCBellmanOptimizer(**b)
         np.testing.assert_allclose(opt.cf, LSMCBellmanOptimizer(**a).cf)
+
+    def test_decide_matches_forward_simulation(self) -> None:
+        """The steering decision of month 0 equals the first month of the simulation."""
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(small_params()))
+        opt.solve()
+        d = opt.decide(0, opt.initial_wealth)
+        self.assertAlmostEqual(d["consumption"], float(opt.opt_consumption.values[0, 0]), places=6)
+        self.assertAlmostEqual(d["equity_share"], float(opt.opt_equity_share.values[0, 0]), places=9)
+        self.assertAlmostEqual(d["equity"] + d["savings"], d["invested"], places=9)
+
+    def test_holdings_are_consistent(self) -> None:
+        """Holdings before rebalancing add up to the wealth; capital gains tax lowers the wealth."""
+        data = small_params()
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
+        opt.solve()
+        total = opt.opt_equity_before.values + opt.opt_savings_before.values
+        np.testing.assert_allclose(total, opt.opt_wealth.values, rtol=1e-12)
+        data["tax"] = {"tax_savings_interest": False, "tax_equity_returns": False}
+        untaxed = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
+        untaxed.solve()
+        self.assertGreater(np.nanmedian(untaxed.opt_wealth.values[-12]), np.nanmedian(opt.opt_wealth.values[-12]))
+
+    def test_cashflow_items_sum_to_cashflow(self) -> None:
+        opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(small_params()))
+        np.testing.assert_allclose(opt.cashflow_items().sum(axis=1).values, opt.cf, atol=1e-9)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@
     python -m wealthplan.run params/lifecycle_params.yaml [--results results] [--no-figures]
 
 Output folder ``<results>/<timestamp>_<run_config_id>/``:
-summary.json, quantiles.csv, params.yaml (input), figures/*.png.
+summary.json, quantiles.csv, cashflows.csv (items per month), policy.npz (for ``decide``),
+params.yaml (input), figures/*.png.
 """
 
 import argparse
@@ -14,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import numpy as np
 import yaml
 
 from config.stochastic.lsmc.lsmc_config_mapper import LSMCConfigMapper
@@ -57,6 +59,8 @@ def run_plan(data: Dict[str, Any], results_root: str | Path = "results", figures
     with open(run_dir / "params.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
     optimizer.quantiles().to_csv(run_dir / "quantiles.csv")
+    optimizer.cashflow_items().to_csv(run_dir / "cashflows.csv")
+    np.savez_compressed(run_dir / "policy.npz", **optimizer.policy_dict())
     if figures:
         from wealthplan.plots import save_figures
 

@@ -240,37 +240,80 @@ def bellman_values(grid: np.ndarray, cont: np.ndarray, y: float, beta: float, ga
     return out
 
 
+@nb.njit(cache=True)
+def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, shares: np.ndarray, beta: float,
+            gamma: float, epsilon: float, h: np.ndarray, best_share: np.ndarray):
+    """
+    Optimal invested amount x and equity share for resources m > 0 at one market state.
+
+    The regressed continuation value (coef: (D, n_w, n_a), basis values phi) is maximised over
+    the equity shares per grid point; the consumption follows from ``_optimal_investment``,
+    the equity share is interpolated between the neighbouring grid points of x.
+    h and best_share are work arrays of length n_w.
+    """
+    n_w, n_a, d_max = grid.shape[0], shares.shape[0], phi.shape[0]
+    for j in range(n_w):
+        vmax, kbest = -np.inf, 0
+        for k in range(n_a):
+            v = 0.0
+            for i in range(d_max):
+                v += phi[i] * coef[i, j, k]
+            if v > vmax:
+                vmax, kbest = v, k
+        h[j] = vmax
+        best_share[j] = shares[kbest]
+    x, _, l = _optimal_investment(m, grid, h, 0, beta, gamma, epsilon)
+    if l + 1 < n_w and x > grid[l]:
+        wl = (x - grid[l]) / (grid[l + 1] - grid[l])
+        alpha = best_share[l] + wl * (best_share[l + 1] - best_share[l])
+    elif l > 0 and x < grid[l]:
+        wl = (x - grid[l - 1]) / (grid[l] - grid[l - 1])
+        alpha = best_share[l - 1] + wl * (best_share[l] - best_share[l - 1])
+    else:
+        alpha = best_share[l]
+    return x, alpha
+
+
 @nb.njit(parallel=True, cache=True)
 def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds: np.ndarray, degrees: np.ndarray,
                   shares: np.ndarray, cashflows: np.ndarray, equity: np.ndarray, alive: np.ndarray, w0: float,
-                  rf: float, beta: float, gamma: float, epsilon: float, terminal_consume: bool):
+                  equity0: float, rf: float, equity_tax: float, beta: float, gamma: float, epsilon: float,
+                  terminal_consume: bool):
     """
     Simulate the optimal policy on out-of-sample paths.
 
-    At every month the regressed continuation value is evaluated at the path's market state,
-    maximised over the equity shares per grid point, and the consumption is chosen exactly as
-    in the backward induction (``_optimal_investment``).
+    At every month the regressed continuation value is evaluated at the path's market state
+    (``_decide``). Holdings are tracked per asset: the equity holding grows with the equity
+    return after tax 1 + (R - 1)(1 - equity_tax), the savings holding with rf (after tax).
 
     Returns
     -------
-    wealth, consumption, equity_share, invested : np.ndarray, shape (T, n_paths), NaN after death.
+    wealth, consumption, equity_share, invested, equity_before, savings_before :
+        np.ndarray, shape (T, n_paths), NaN after death. ``*_before`` are the holdings at the
+        start of the month (before consumption and rebalancing).
     """
     n_paths, n_t = equity.shape
-    n_w, n_a = grid.shape[0], shares.shape[0]
+    n_w = grid.shape[0]
     wealth = np.full((n_t, n_paths), np.nan)
     cons = np.full((n_t, n_paths), np.nan)
     share = np.full((n_t, n_paths), np.nan)
     invested = np.full((n_t, n_paths), np.nan)
+    eq_before = np.full((n_t, n_paths), np.nan)
+    sav_before = np.full((n_t, n_paths), np.nan)
     d_max = coeffs.shape[1]
     for p in nb.prange(n_paths):
-        w = w0
+        eq_hold = min(max(equity0, 0.0), w0)
+        sav_hold = w0 - eq_hold
         phi = np.zeros(d_max)
         h = np.empty(n_w)
         best_share = np.empty(n_w)
         for t in range(n_t):
             if alive[p, t] == 0.0:
                 break
+            w = eq_hold + sav_hold
             wealth[t, p] = w
+            eq_before[t, p] = eq_hold
+            sav_before[t, p] = sav_hold
             m = w + cashflows[t]
             if t == n_t - 1:  # last month
                 cons[t, p] = max(m, 0.0) if terminal_consume else 0.0
@@ -281,38 +324,64 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
                 cons[t, p] = 0.0
                 invested[t, p] = 0.0
                 share[t, p] = 0.0
-                w = 0.0
+                eq_hold = 0.0
+                sav_hold = 0.0
                 continue
             z = (np.log(equity[p, t]) - means[t]) / stds[t] if stds[t] > 0.0 else 0.0
             for i in range(d_max):
                 phi[i] = z ** i if i <= degrees[t] else 0.0
-            coef = coeffs[t]
-            for j in range(n_w):
-                vmax, kbest = -np.inf, 0
-                for k in range(n_a):
-                    v = 0.0
-                    for i in range(d_max):
-                        v += phi[i] * coef[i, j, k]
-                    if v > vmax:
-                        vmax, kbest = v, k
-                h[j] = vmax
-                best_share[j] = shares[kbest]
-            x, _, l = _optimal_investment(m, grid, h, 0, beta, gamma, epsilon)
-            # equity share at x: interpolate between the neighbouring grid points
-            if l + 1 < n_w and x > grid[l]:
-                wl = (x - grid[l]) / (grid[l + 1] - grid[l])
-                alpha = best_share[l] + wl * (best_share[l + 1] - best_share[l])
-            elif l > 0 and x < grid[l]:
-                wl = (x - grid[l - 1]) / (grid[l] - grid[l - 1])
-                alpha = best_share[l - 1] + wl * (best_share[l] - best_share[l - 1])
-            else:
-                alpha = best_share[l]
+            x, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share)
             cons[t, p] = m - x
             invested[t, p] = x
             share[t, p] = alpha
             r = equity[p, t + 1] / equity[p, t]
-            w = x * (alpha * r + (1.0 - alpha) * rf)
-    return wealth, cons, share, invested
+            eq_hold = alpha * x * (1.0 + (r - 1.0) * (1.0 - equity_tax))
+            sav_hold = (1.0 - alpha) * x * rf
+    return wealth, cons, share, invested, eq_before, sav_before
+
+
+def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
+    """
+    Optimal decision of month t for a given wealth, from a saved policy (``policy_dict``).
+
+    Parameters
+    ----------
+    policy : dict
+        Arrays of ``LSMCBellmanOptimizer.policy_dict()`` (also loadable from policy.npz).
+    t : int
+        Month index.
+    wealth : float
+        Liquid wealth at the start of the month (equity + savings).
+    equity_level : float
+        Equity level S_t / S_0 (only matters for a regression degree > 0).
+
+    Returns
+    -------
+    dict
+        resources (wealth + net cashflow), consumption, invested, equity_share, equity, savings,
+        shortfall.
+    """
+    cf = float(policy["cashflows"][t])
+    m = wealth + cf
+    n_t = policy["cashflows"].shape[0]
+    out = {"net_cashflow": cf, "resources": m, "shortfall": max(-m, 0.0)}
+    if t >= n_t - 1 or m <= 0.0:
+        terminal_consume = bool(policy["terminal_consume"])
+        c = max(m, 0.0) if (t >= n_t - 1 and terminal_consume) else 0.0
+        out.update(consumption=c, invested=max(m, 0.0) - c, equity_share=0.0)
+    else:
+        d_max = policy["coeffs"].shape[1]
+        std = float(policy["state_std"][t])
+        z = (np.log(equity_level) - float(policy["state_mean"][t])) / std if std > 0 else 0.0
+        phi = np.array([z ** i if i <= int(policy["state_degree"][t]) else 0.0 for i in range(d_max)])
+        grid = policy["wealth_grid"]
+        x, alpha = _decide(m, grid, policy["coeffs"][t], phi, policy["equity_shares"], float(policy["beta"]),
+                           float(policy["gamma"]), float(policy["epsilon"]), np.empty(grid.size),
+                           np.empty(grid.size))
+        out.update(consumption=m - x, invested=x, equity_share=alpha)
+    out["equity"] = out["equity_share"] * out["invested"]
+    out["savings"] = out["invested"] - out["equity"]
+    return out
 
 
 # ---------------------------------------------------------------------------- optimizer
@@ -347,6 +416,9 @@ class LSMCBellmanOptimizer:
         regression_degree: int = 0,
         shortfall_penalty: float = 1.0,
         apply_terminal_penalty: bool = False,
+        savings_tax_rate: float = 0.0,
+        equity_tax_rate: float = 0.0,
+        initial_equity: float = 0.0,
         use_cache: bool = True,
         params_hash: str = "",
         cache_root: Optional[str] = None,
@@ -394,6 +466,11 @@ class LSMCBellmanOptimizer:
             Utility cost per euro of fixed expenses that cannot be paid.
         apply_terminal_penalty : bool
             True: terminal value square_penalty(w) instead of consuming everything at the end.
+        savings_tax_rate, equity_tax_rate : float
+            Capital gains tax on interest and (after partial exemption) on equity returns,
+            charged when the return accrues (``TaxModel``).
+        initial_equity : float
+            Part of the initial wealth currently held in equity (forward simulation only).
         use_cache : bool
             Cache the regression coefficients per month (ResultCache).
         params_hash : str
@@ -433,7 +510,11 @@ class LSMCBellmanOptimizer:
         self.age_grid = self.current_age + self.time_grid
         self.p_survive = self.survival_model.conditional_survival_probabilities(self.age_grid, self.dt)
         self.survival_probabilities = np.concatenate(([1.0], np.cumprod(self.p_survive[:-1])))
-        self.rf = (1.0 + yearly_return_savings) ** self.dt
+        self.savings_tax_rate = savings_tax_rate
+        self.equity_tax_rate = equity_tax_rate
+        self.initial_equity = float(initial_equity)
+        # savings gross return after tax on the interest
+        self.rf = 1.0 + ((1.0 + yearly_return_savings) ** self.dt - 1.0) * (1.0 - savings_tax_rate)
 
         self.wealth_grid = w_max * np.linspace(0.0, 1.0, n_wealth) ** 2
         self.equity_shares = np.linspace(0.0, max_equity_share, n_equity_shares)
@@ -457,6 +538,8 @@ class LSMCBellmanOptimizer:
         self.opt_consumption = pd.DataFrame()
         self.opt_equity_share = pd.DataFrame()
         self.opt_invested = pd.DataFrame()
+        self.opt_equity_before = pd.DataFrame()
+        self.opt_savings_before = pd.DataFrame()
         self.survival_paths = np.empty((0, 0))
         self.monthly_cashflows = pd.Series(self.cf, index=self.months)
 
@@ -520,7 +603,7 @@ class LSMCBellmanOptimizer:
 
         n_steps = self.n_months - 1
         for t in tqdm(range(n_steps - 1, -1, -1), total=n_steps, desc="Backward induction", mininterval=1.0):
-            r = equity[:, t + 1] / equity[:, t]
+            r = 1.0 + (equity[:, t + 1] / equity[:, t] - 1.0) * (1.0 - self.equity_tax_rate)  # after tax
             gross = self.equity_shares[:, None] * r[None, :] + (1.0 - self.equity_shares[:, None]) * self.rf
             reg = WealthRegressor(equity[:, t], degree=self.regression_degree)
             proj, sum_y, sum_y2 = project_realised_values(self.wealth_grid, v_next, gross, reg.q,
@@ -539,7 +622,14 @@ class LSMCBellmanOptimizer:
             if progress is not None:
                 progress("backward induction", (n_steps - t) / n_steps)
 
-        self.value_in_sample = float(np.interp(self.initial_wealth, self.wealth_grid, v_next.mean(axis=0)))
+        # V_0 at the initial wealth from the Bellman equation itself (interpolating the concave
+        # V_0 between grid points would understate it); all paths share the state at t = 0.
+        m0 = self.initial_wealth + float(self.cf[0])
+        if m0 > 0.0:
+            self.value_in_sample = float(_optimal_investment(m0, self.wealth_grid, cont[0], 0, self.beta, self.gamma,
+                                                             self.epsilon)[1])
+        else:
+            self.value_in_sample = float(np.interp(self.initial_wealth, self.wealth_grid, v_next.mean(axis=0)))
         data = self.cache.load_date(self.months[0]) if self.cache.has(self.months[0]) else None
         if data is not None:
             data["value_in_sample"] = self.value_in_sample
@@ -550,10 +640,12 @@ class LSMCBellmanOptimizer:
         oos_seed = None if self.seed is None else self.seed + 1
         equity = self._equity_paths(self.n_sims_oos, oos_seed)
         self.survival_paths = self.survival_process.simulate(n_sims=self.n_sims_oos, dates=self.months)
-        wealth, cons, share, invested = forward_paths(
+        wealth, cons, share, invested, eq_before, sav_before = forward_paths(
             self.wealth_grid, self.coeffs, self.state_mean, self.state_std, self.state_degree, self.equity_shares,
-            self.cf, equity, self.survival_paths, self.initial_wealth, self.rf, self.beta, self.gamma, self.epsilon,
-            not self.apply_terminal_penalty)
+            self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf,
+            self.equity_tax_rate, self.beta, self.gamma, self.epsilon, not self.apply_terminal_penalty)
+        self.opt_equity_before = pd.DataFrame(eq_before, index=self.months)
+        self.opt_savings_before = pd.DataFrame(sav_before, index=self.months)
         self.opt_wealth = pd.DataFrame(wealth, index=self.months)
         self.opt_consumption = pd.DataFrame(cons, index=self.months)
         self.opt_equity_share = pd.DataFrame(share, index=self.months)
@@ -638,7 +730,8 @@ class LSMCBellmanOptimizer:
                                 "alive": np.nanmean(self.survival_paths, axis=0)}
         series = {"wealth": self.opt_wealth.values, "consumption": self.opt_consumption.values,
                   "equity_share": self.opt_equity_share.values,
-                  "equity_amount": self.opt_equity_share.values * self.opt_invested.values}
+                  "equity_amount": self.opt_equity_share.values * self.opt_invested.values,
+                  "equity_before": self.opt_equity_before.values, "savings_before": self.opt_savings_before.values}
         with np.errstate(all="ignore"):
             for name, data in series.items():
                 valid = np.isfinite(data).any(axis=1)
@@ -648,6 +741,37 @@ class LSMCBellmanOptimizer:
                     cols[f"{name}_p{p:02d}"] = col
                 cols[f"{name}_mean"] = np.nanmean(data, axis=1)
         return pd.DataFrame(cols, index=pd.Index(self.months, name="month"))
+
+    def policy_dict(self) -> Dict[str, np.ndarray]:
+        """Everything ``decide`` needs, as arrays (saved as policy.npz with the results)."""
+        return {
+            "months": np.array([m.isoformat() for m in self.months]),
+            "cashflows": self.cf, "wealth_grid": self.wealth_grid, "equity_shares": self.equity_shares,
+            "coeffs": self.coeffs, "state_mean": self.state_mean, "state_std": self.state_std,
+            "state_degree": self.state_degree, "beta": np.float64(self.beta), "gamma": np.float64(self.gamma),
+            "epsilon": np.float64(self.epsilon), "terminal_consume": np.bool_(not self.apply_terminal_penalty),
+        }
+
+    def decide(self, t: int, wealth: float, equity_level: float = 1.0) -> Dict[str, float]:
+        """Optimal decision of month t for a given wealth (see module function ``decide``)."""
+        return decide(self.policy_dict(), t, wealth, equity_level)
+
+    def cashflow_items(self) -> pd.DataFrame:
+        """
+        Deterministic cashflows per month and item (signed: income +, expenses -).
+
+        Pensions are split into contributions, Rürup tax refund, gross payouts and income tax.
+        """
+        rows = []
+        for m in self.months:
+            row: Dict[str, float] = {}
+            for cf in self.cashflows:
+                parts = cf.components(m) if hasattr(cf, "components") else {
+                    getattr(cf, "name", type(cf).__name__): cf.cashflow(m)}
+                for key, value in parts.items():
+                    row[key] = row.get(key, 0.0) + value
+            rows.append(row)
+        return pd.DataFrame(rows, index=pd.Index(self.months, name="month")).fillna(0.0)
 
     def policy_grid(self, t: int, state: float = 1.0) -> tuple:
         """

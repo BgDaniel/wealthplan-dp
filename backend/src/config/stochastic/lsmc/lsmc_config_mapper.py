@@ -21,7 +21,7 @@ KEY_APPLY_TERMINAL_PENALTY: str = "apply_terminal_penalty"
 KEY_PARAMS_HASH: str = "params_hash"
 
 # Part of the cache key: bump whenever the backward induction changes its results.
-SOLVER_VERSION: str = "lsmc-2"
+SOLVER_VERSION: str = "lsmc-3"
 
 TECHNICAL_DEFAULTS: Dict[str, Any] = {
     KEY_W_MAX: 3_000_000.0,
@@ -38,11 +38,13 @@ def solver_params_hash(data: Dict[str, Any]) -> str:
     """
     Hash of everything the backward induction depends on.
 
-    The run name, the number of out-of-sample paths and the survival seed only affect the
-    forward simulation, so changing them reuses the cached regression coefficients.
+    The run name, the current equity holding, the number of out-of-sample paths and the
+    survival seed only affect the forward simulation, so changing them reuses the cached
+    regression coefficients.
     """
     relevant = copy.deepcopy(data)
     relevant.get(KEY_SIMULATION, {}).pop(KEY_RUN_CONFIG_ID, None)
+    relevant.get(KEY_SIMULATION, {}).pop("initial_equity", None)
     stochastic = relevant.get(KEY_STOCHASTIC, {})
     stochastic.pop(KEY_N_SIMS_OOS, None)
     stochastic.get(KEY_SURVIVAL_MODEL, {}).pop(KEY_SURVIVAL_SEED, None)
