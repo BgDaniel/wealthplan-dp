@@ -125,8 +125,8 @@ life expectancy at 40 and 65 of the Destatis period life table 2021/23 – or `c
 
 ## Emergency reserve (YAML section `reserve`)
 
-With `enabled`, at least `months_of_fixed_costs` × the month's fixed costs stay in the savings
-account: the equity share is limited to 1 − reserve / invested amount (backward induction,
+With `enabled`, at least `months_of_fixed_costs` × the average monthly fixed costs of the
+next 12 months stay in the savings account: the equity share is limited to 1 − reserve / invested amount (backward induction,
 simulation and Steering page).
 
 ## Rürup (`ruerup_plans` under `total_pension`)

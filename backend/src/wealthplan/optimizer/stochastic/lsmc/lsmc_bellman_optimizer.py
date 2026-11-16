@@ -153,7 +153,18 @@ def best_continuation(q: np.ndarray, proj: np.ndarray, grid: np.ndarray, shares:
             cap = _max_share(grid[j], reserve) + 1e-12
             for k in range(n_a):
                 if k > 0 and shares[k] > cap:
-                    continue
+                    # the cap itself lies between shares[k-1] and shares[k]: interpolate linearly
+                    if shares[k - 1] < cap - 1e-12:
+                        v0 = 0.0
+                        v1 = 0.0
+                        for b in range(d):
+                            v0 += q[s, b] * proj[b, j, k - 1]
+                            v1 += q[s, b] * proj[b, j, k]
+                        w = (cap - shares[k - 1]) / (shares[k] - shares[k - 1])
+                        vc = v0 + w * (v1 - v0)
+                        if vc > best:
+                            best = vc
+                    break
                 v = 0.0
                 for b in range(d):
                     v += q[s, b] * proj[b, j, k]
@@ -272,18 +283,29 @@ def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, share
     """
     n_w, n_a, d_max = grid.shape[0], shares.shape[0], phi.shape[0]
     for j in range(n_w):
-        vmax, kbest = -np.inf, 0
+        vmax, abest = -np.inf, 0.0
         cap = _max_share(grid[j], reserve) + 1e-12
         for k in range(n_a):
             if k > 0 and shares[k] > cap:
-                continue
+                # the cap itself lies between shares[k-1] and shares[k]: interpolate linearly
+                if shares[k - 1] < cap - 1e-12:
+                    v0 = 0.0
+                    v1 = 0.0
+                    for i in range(d_max):
+                        v0 += phi[i] * coef[i, j, k - 1]
+                        v1 += phi[i] * coef[i, j, k]
+                    w = (cap - shares[k - 1]) / (shares[k] - shares[k - 1])
+                    vc = v0 + w * (v1 - v0)
+                    if vc > vmax:
+                        vmax, abest = vc, min(cap, 1.0)
+                break
             v = 0.0
             for i in range(d_max):
                 v += phi[i] * coef[i, j, k]
             if v > vmax:
-                vmax, kbest = v, k
+                vmax, abest = v, shares[k]
         h[j] = vmax
-        best_share[j] = shares[kbest]
+        best_share[j] = abest
     x, _, l = _optimal_investment(m, grid, h, 0, beta, gamma, epsilon)
     if l + 1 < n_w and x > grid[l]:
         wl = (x - grid[l]) / (grid[l + 1] - grid[l])
@@ -562,7 +584,10 @@ class LSMCBellmanOptimizer:
         items = self.cashflow_items().values / self.price_index[:, None]
         self.fixed_costs = -np.where(items < 0.0, items, 0.0).sum(axis=1)  # real
         self.reserve_months = reserve_months
-        self.reserve = reserve_months * self.fixed_costs
+        # reserve on the average fixed costs of the next 12 months (yearly insurances would
+        # otherwise move money between savings account and equity every January)
+        avg = np.array([self.fixed_costs[t:t + 12].mean() for t in range(self.n_months)])
+        self.reserve = reserve_months * avg
 
         self.wealth_grid = w_max * np.linspace(0.0, 1.0, n_wealth) ** 2
         self.equity_shares = np.linspace(0.0, max_equity_share, n_equity_shares)
