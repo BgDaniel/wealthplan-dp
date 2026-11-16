@@ -858,7 +858,7 @@ class LSMCBellmanOptimizer:
         return pd.DataFrame(rows, index=pd.Index(self.months, name="month")).fillna(0.0)
 
     def cashflow_categories(self) -> Dict[str, str]:
-        """Category of every column of ``cashflow_items`` (for the composition plot)."""
+        """Category of every column of ``cashflow_items`` (fixed costs, reserve, Steering page)."""
         cats: Dict[str, str] = {}
         for cf in self.cashflows:
             kind = getattr(cf, "kind", type(cf).__name__)
