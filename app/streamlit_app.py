@@ -532,6 +532,12 @@ def steering_page() -> None:
     m[2].metric("Net cashflow", _eur(d["net_cashflow"]), help="income − fixed costs")
     m[3].metric("Consumption allowed", _eur(d["consumption"]),
                 help="optimal discretionary consumption on top of the fixed costs")
+    if price > 1.0005:
+        start_year = months[0].year
+        st.markdown(f'<div class="facts">In purchasing power of {start_year} (÷ price index <b>{price:.2f}</b>): '
+                    f'net income <b>{_eur(income / price)}</b> · fixed costs <b>{_eur(fixed / price)}</b> · '
+                    f'net cashflow <b>{_eur(d["net_cashflow"] / price)}</b> · consumption allowed '
+                    f'<b>{_eur(d["consumption"] / price)}</b></div>', unsafe_allow_html=True)
 
     left, right = st.columns([1, 1.15], gap="large")
     with left:
