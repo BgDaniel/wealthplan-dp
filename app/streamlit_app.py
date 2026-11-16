@@ -44,6 +44,7 @@ sys.path.insert(0, str(ROOT / "backend" / "src"))
 from config.stochastic.lsmc.lsmc_config_mapper import TECHNICAL_DEFAULTS, LSMCConfigMapper  # noqa: E402
 from wealthplan.tax.tax_model import TaxModel  # noqa: E402
 from wealthplan.economy.inflation import InflationModel  # noqa: E402
+from wealthplan.cashflows.payroll import PayrollModel  # noqa: E402
 from wealthplan.catalog import DEFAULT_PARAMS_DIR, delete_config, list_configs, load_config, save_config  # noqa: E402
 from wealthplan.jobs import (DEFAULT_JOBS_ROOT, cancel_job, delete_job, list_jobs, read_status,  # noqa: E402
                              submit_job)
@@ -492,12 +493,20 @@ def steering_page() -> None:
     for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings"):
         d[key] *= price  # back to nominal euros of the month
     reserve = price * float(policy["reserve"][t]) if "reserve" in policy else 0.0
-    income = float(items[items > 0].sum())
-    fixed = float(-items[items < 0].sum())
+    cat_file = run_dir / "cashflow_categories.json"
+    cats = json.loads(cat_file.read_text()) if cat_file.exists() else {}
+    income_cats = ("Salary", "Pensions (gross)", "Tax refund", "Social security", "Income tax")
+    if cats:
+        income = float(sum(v for k, v in items.items() if cats.get(k) in income_cats))
+        fixed = float(-sum(v for k, v in items.items() if cats.get(k) not in income_cats))
+    else:
+        income = float(items[items > 0].sum())
+        fixed = float(-items[items < 0].sum())
 
     m = st.columns(4)
-    m[0].metric("Income", _eur(income), help="salary / pensions / tax refunds of this month")
-    m[1].metric("Fixed costs", _eur(fixed), help="rent, living costs, insurances, contributions, taxes")
+    m[0].metric("Net income", _eur(income),
+                help="salary / bonus / pensions after income tax and social security, plus tax refunds")
+    m[1].metric("Fixed costs", _eur(fixed), help="rent, living costs, insurances, pension contributions")
     m[2].metric("Net cashflow", _eur(d["net_cashflow"]), help="income − fixed costs")
     m[3].metric("Consumption allowed", _eur(d["consumption"]),
                 help="optimal discretionary consumption on top of the fixed costs")
@@ -614,8 +623,8 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
 
     with st.form(f"config_{name}", border=True):
         new_name = st.text_input("Name", name, help="file name in params/: letters, digits, _ - .")
-        tab_sim, tab_cf, tab_pen, tab_tax, tab_infl, tab_mkt, tab_num = st.tabs(
-            ["Person & horizon", "Income & expenses", "Pensions", "Taxes", "Inflation & reserve",
+        tab_sim, tab_sal, tab_cf, tab_pen, tab_tax, tab_infl, tab_mkt, tab_num = st.tabs(
+            ["Person & horizon", "Salary & payroll", "Expenses", "Pensions", "Taxes", "Inflation & reserve",
              "Market & mortality", "Preferences & numerics"])
 
         with tab_sim:
@@ -635,10 +644,55 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                       min_value=0.0, step=5000.0,
                                       help="part of the initial wealth currently held in equity; rest: savings")
 
+        sal = life.get("salary") or {}
+        sal_mode = sal.get("mode", "gross" if "yearly_fixed" in sal else "net")
+        pay = {**dataclasses.asdict(PayrollModel()), **(data.get("payroll") or {})}
+        with tab_sal:
+            c1, c2, c3, c4 = st.columns(4)
+            salary_mode = c1.radio("Amounts", ["gross", "net"], index=0 if sal_mode == "gross" else 1, horizontal=True,
+                            help="gross: converted to net by the payroll below; net: as paid out")
+            months = list(range(1, 13))
+            bonus_month = c2.selectbox("Bonus paid in", months, index=int(sal.get("bonus_month", 4)) - 1,
+                                       format_func=lambda m: date(2000, m, 1).strftime("%B"))
+            fixed_gross = c3.number_input("Fixed gross salary [€/year]", value=float(sal.get("yearly_fixed", 0.0)),
+                                          min_value=0.0, step=1000.0, help="paid in 12 monthly amounts (mode gross)")
+            bonus_gross = c4.number_input("Bonus gross [€/year]", value=float(sal.get("yearly_bonus", 0.0)),
+                                          min_value=0.0, step=500.0, help="deterministic (mode gross)")
+            net_month = c3.number_input("Net salary [€/month]", value=float(sal.get("monthly_net",
+                                                                                     sal.get("monthly_amount", 0.0))),
+                                        min_value=0.0, step=100.0, help="mode net")
+            net_bonus = c4.number_input("Net bonus [€/year]", value=float(sal.get("bonus_net", 0.0)), min_value=0.0,
+                                        step=500.0, help="mode net")
+            st.caption("Payroll (mode gross): employee contributions up to the ceilings, income tax §32a 2025 + "
+                       "Soli + church tax on gross − Werbungskosten − Vorsorgeaufwendungen. Values 2025; ceilings "
+                       "and allowances grow with inflation if tax brackets are indexed.")
+            c1, c2, c3, c4 = st.columns(4)
+            health = c1.selectbox("Health insurance", ["statutory", "private"],
+                                  index=0 if pay["health_insurance"] == "statutory" else 1)
+            health_rate = c2.number_input("Health rate employee [%]", value=100 * float(pay["health_rate"]),
+                                          step=0.05, format="%.2f", help="7.3 % + half the Zusatzbeitrag")
+            care_rate = c3.number_input("Care rate employee [%]", value=100 * float(pay["care_rate"]), step=0.1,
+                                        format="%.2f", help="1.8 %, childless 2.4 %")
+            church = c4.selectbox("Church tax", [0.0, 0.08, 0.09],
+                                  index=[0.0, 0.08, 0.09].index(float(pay["church_tax_rate"]))
+                                  if float(pay["church_tax_rate"]) in (0.0, 0.08, 0.09) else 0,
+                                  format_func=lambda v: "none" if v == 0 else f"{100 * v:.0f} %")
+            premium = c1.number_input("Private premium [€/month]", value=float(pay["private_premium_monthly"]),
+                                      min_value=0.0, step=10.0)
+            subsidy = c2.number_input("Employer subsidy [€/month]",
+                                      value=float(pay["private_employer_subsidy_monthly"]), min_value=0.0, step=10.0)
+            pension_rate = c3.number_input("Pension + unemployment rate [%]",
+                                           value=100 * (float(pay["pension_rate"]) + float(pay["unemployment_rate"])),
+                                           step=0.1, format="%.2f", help="9.3 % + 1.3 %")
+            werbung = c4.number_input("Werbungskosten [€/year]", value=float(pay["werbungskosten"]), min_value=0.0,
+                                      step=10.0)
+            ceil_rv = c1.number_input("Ceiling RV/AV [€/year]", value=float(pay["pension_ceiling"]), step=600.0)
+            ceil_kv = c2.number_input("Ceiling KV/PV [€/year]", value=float(pay["health_ceiling"]), step=450.0)
+            basis_max = c3.number_input("Höchstbetrag Basisvorsorge [€/year]", value=float(pay["basis_pension_max"]),
+                                        step=100.0)
+
         with tab_cf:
             c1, c2, c3 = st.columns(3)
-            salary = c1.number_input("Net salary [€/month]", value=float(life.get("salary", {}).get(
-                "monthly_amount", 0.0)), min_value=0.0, step=100.0)
             rent = c2.number_input("Rent [€/month]", value=float(life.get("rent", {}).get("monthly_amount", 0.0)),
                                    min_value=0.0, step=50.0)
             groceries = c3.number_input("Groceries [€/month]", value=float(life.get("groceries", {}).get(
@@ -682,7 +736,7 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             tax_int = c3.toggle("Tax interest", value=bool(tax["tax_savings_interest"]))
             tax_eq = c3.toggle("Tax equity returns", value=bool(tax["tax_equity_returns"]),
                                help="taxed when the return accrues (simplification, see README)")
-            mode = c1.selectbox("Income tax on pensions", ["tariff", "flat"],
+            tax_mode = c1.selectbox("Income tax on pensions", ["tariff", "flat"],
                                 index=0 if tax["income_tax_mode"] == "tariff" else 1,
                                 format_func={"tariff": "§32a tariff 2025 + Soli", "flat": "flat rate"}.get)
             flat = c2.number_input("Flat tax rate in retirement [%]",
@@ -781,8 +835,19 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             "start_date": start, "end_date": end, "retirement_date": retirement, "current_age": age,
             "yearly_return_savings": savings / 100.0, "beta": beta}
         lifecycle: dict[str, Any] = {}
-        if salary > 0:
-            lifecycle["salary"] = {"monthly_amount": salary, "retirement_date": retirement}
+        if salary_mode == "gross" and fixed_gross + bonus_gross > 0:
+            lifecycle["salary"] = {"mode": "gross", "yearly_fixed": fixed_gross, "yearly_bonus": bonus_gross,
+                                   "bonus_month": int(bonus_month), "retirement_date": retirement}
+        elif salary_mode == "net" and net_month + net_bonus > 0:
+            lifecycle["salary"] = {"mode": "net", "monthly_net": net_month, "bonus_net": net_bonus,
+                                   "bonus_month": int(bonus_month), "retirement_date": retirement}
+        unemployment = float(pay["unemployment_rate"])
+        new["payroll"] = {"pension_rate": pension_rate / 100.0 - unemployment, "unemployment_rate": unemployment,
+                          "pension_ceiling": ceil_rv, "health_insurance": health, "health_rate": health_rate / 100.0,
+                          "care_rate": care_rate / 100.0, "health_ceiling": ceil_kv,
+                          "private_premium_monthly": premium, "private_employer_subsidy_monthly": subsidy,
+                          "church_tax_rate": float(church), "werbungskosten": werbung,
+                          "basis_pension_max": basis_max}
         for key, value in (("rent", rent), ("electricity", electricity), ("telecommunication", telecom),
                            ("groceries", groceries)):
             if value > 0:
@@ -796,7 +861,7 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                                 "ruerup_plans": _ruerup_plans(ruerup, start)}
         new["tax"] = {"capital_gains_tax_rate": cg_rate / 100.0, "equity_partial_exemption": exemption / 100.0,
                       "tax_savings_interest": bool(tax_int), "tax_equity_returns": bool(tax_eq),
-                      "income_tax_mode": mode, "income_tax_rate_retirement": flat / 100.0,
+                      "income_tax_mode": tax_mode, "income_tax_rate_retirement": flat / 100.0,
                       "marginal_tax_rate_working": marginal / 100.0, "basis_pension_deduction_room": room,
                       "pension_allowance_yearly": allowance}
         new["stochastic"] = {"yearly_return": mu / 100.0, "sigma": sigma / 100.0, "n_sims": int(n_sims),
@@ -825,6 +890,13 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             st.error(f"Invalid parameters: {exc}")
 
 
+def _salary_label(sal: dict[str, Any]) -> str:
+    if "yearly_fixed" in sal or sal.get("mode") == "gross":
+        return f'{sal.get("yearly_fixed", 0):,.0f} + {sal.get("yearly_bonus", 0):,.0f} gross'
+    monthly = sal.get("monthly_net", sal.get("monthly_amount", 0.0))
+    return f'{12 * monthly + sal.get("bonus_net", 0):,.0f} net'
+
+
 def configurations_page() -> None:
     """Stored YAML configurations as forms: add, edit, copy, delete."""
     _header("Master data", "Configurations", "Parameter files in params/. Edit an existing one or start a new "
@@ -836,7 +908,7 @@ def configurations_page() -> None:
         sim, sto = d["simulation_parameters"], d["stochastic"]
         rows.append({"Name": n, "Start": str(sim["start_date"]), "End": str(sim["end_date"]),
                      "Retirement": str(sim["retirement_date"]), "Initial wealth [€]": sim["initial_wealth"],
-                     "Salary [€]": d.get("lifecycle", {}).get("salary", {}).get("monthly_amount", 0.0),
+                     "Salary + bonus [€/yr]": _salary_label(d.get("lifecycle", {}).get("salary") or {}),
                      "Equity μ [%]": 100 * sto["yearly_return"], "Equity σ [%]": 100 * sto["sigma"],
                      "γ": d.get("utility_function", {}).get("gamma"), "Paths": sto["n_sims"]})
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")

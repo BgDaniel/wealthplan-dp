@@ -31,12 +31,16 @@ class TotalPension(CashflowBase):
     """
 
     def __init__(self, pensions: List[PensionPlan], retirement_date: dt.date, tax: Optional[TaxModel] = None,
-                 tax_scale: Optional[Callable[[dt.date], float]] = None):
+                 tax_scale: Optional[Callable[[dt.date], float]] = None,
+                 refund: Optional[Callable[[dt.date, float], float]] = None):
         self.pensions = pensions
         self.retirement_date: dt.date = retirement_date
         self.tax = tax or TaxModel()
         # indexation of the tariff brackets / allowances (inflation), 1 if not indexed
         self.tax_scale: Callable[[dt.date], float] = tax_scale or (lambda d: 1.0)
+        # exact Rürup refund (date, monthly contribution) -> monthly refund, e.g. from the payroll;
+        # default: marginal tax rate of the TaxModel
+        self.refund = refund
 
     def taxable_share(self, plan: PensionPlan) -> float:
         """Taxable share of a plan's payout."""
@@ -64,8 +68,8 @@ class TotalPension(CashflowBase):
                 if isinstance(p, RuerupPension):
                     ruerup += c
             if ruerup:
-                out["Rürup tax refund"] = self.tax.basis_pension_refund_monthly(
-                    ruerup, self.tax_scale(delivery_date))
+                out["Rürup tax refund"] = (self.refund(delivery_date, ruerup) if self.refund is not None else
+                                           self.tax.basis_pension_refund_monthly(ruerup, self.tax_scale(delivery_date)))
             return out
 
         taxable = 0.0

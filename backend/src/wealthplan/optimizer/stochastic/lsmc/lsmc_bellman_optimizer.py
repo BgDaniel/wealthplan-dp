@@ -581,8 +581,13 @@ class LSMCBellmanOptimizer:
         self.price_index = self.inflation_factor ** np.arange(self.n_months)
         self.cf_nominal = self.cf
         self.cf = self.cf_nominal / self.price_index
-        items = self.cashflow_items().values / self.price_index[:, None]
-        self.fixed_costs = -np.where(items < 0.0, items, 0.0).sum(axis=1)  # real
+        # fixed costs (real): living costs, insurances, pension contributions - not the income tax
+        # and social security deducted from salary / pensions
+        items = self.cashflow_items()
+        cats = self.cashflow_categories()
+        deducted = [c for c in items.columns if cats.get(c) in ("Income tax", "Social security")]
+        costs = items.drop(columns=deducted).values / self.price_index[:, None]
+        self.fixed_costs = -np.where(costs < 0.0, costs, 0.0).sum(axis=1)
         self.reserve_months = reserve_months
         # reserve on the average fixed costs of the next 12 months (yearly insurances would
         # otherwise move money between savings account and equity every January)
@@ -857,14 +862,14 @@ class LSMCBellmanOptimizer:
         cats: Dict[str, str] = {}
         for cf in self.cashflows:
             kind = getattr(cf, "kind", type(cf).__name__)
-            if hasattr(cf, "components"):
+            if hasattr(cf, "categories"):
+                cats.update(cf.categories())
+            elif hasattr(cf, "components"):
                 for p in cf.pensions:
                     cats[f"{p.name} contribution"] = "Pension contributions"
                     cats[f"{p.name} pension (gross)"] = "Pensions (gross)"
                 cats["Rürup tax refund"] = "Tax refund"
                 cats["Income tax on pensions"] = "Income tax"
-            elif kind == "Salary":
-                cats[kind] = "Salary"
             elif kind == "Insurance":
                 cats[cf.name] = "Insurances"
             else:

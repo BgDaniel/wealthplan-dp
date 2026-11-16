@@ -3,7 +3,7 @@ import datetime as dt
 from typing import Any, Dict, List, Type
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
-from wealthplan.cashflows.salary import Salary
+from wealthplan.cashflows.payroll import GrossSalary, NetSalary, PayrollModel
 from wealthplan.cashflows.rent import Rent
 from wealthplan.cashflows.electricity import Electricity
 from wealthplan.cashflows.telecommunication import Telecommunication
@@ -32,7 +32,6 @@ TYPE_TELECOMMUNICATION: str = "telecommunication"
 TYPE_GROCERIES: str = "groceries"
 
 REGULAR_KEYS: List[str] = [
-    TYPE_SALARY,
     TYPE_RENT,
     TYPE_ELECTRICITY,
     TYPE_TELECOMMUNICATION,
@@ -40,7 +39,6 @@ REGULAR_KEYS: List[str] = [
 ]
 
 REGULAR_CLASS_MAP: Dict[str, Type[CashflowBase]] = {
-    TYPE_SALARY: Salary,
     TYPE_RENT: Rent,
     TYPE_ELECTRICITY: Electricity,
     TYPE_TELECOMMUNICATION: Telecommunication,
@@ -75,6 +73,7 @@ KEY_CURRENT_AGE: str = "current_age"
 KEY_BETA: str = "beta"
 
 KEY_INITIAL_EQUITY: str = "initial_equity"
+KEY_PAYROLL: str = "payroll"
 KEY_TAX: str = "tax"
 KEY_INFLATION: str = "inflation"
 KEY_INFLATION_RATE: str = "inflation_rate"
@@ -89,6 +88,15 @@ KEY_USE_CACHE: str = "use_cache"
 KEY_UTILITY_FUNCTION: str = "utility_function"
 KEY_GAMMA: str = "gamma"
 KEY_EPSILON: str = "epsilon"
+
+
+def _payroll_refund(salary: GrossSalary):
+    """Exact monthly Rürup refund from the payroll of the gross salary (date, monthly contribution)."""
+    def refund(date, contribution_monthly: float) -> float:
+        gross = salary.year_payroll(date)["total_gross"]
+        return salary.payroll.basis_pension_refund_yearly(gross, 12.0 * contribution_monthly,
+                                                          salary.tax_scale(date)) / 12.0
+    return refund
 
 
 class ConfigMapper:
@@ -134,11 +142,12 @@ class ConfigMapper:
         tax = TaxModel.from_dict(data.get(KEY_TAX))
         inflation = InflationModel.from_dict(data.get(KEY_INFLATION), sim[KEY_START_DATE])
 
-        cashflows: List[CashflowBase] = []
+        salary = cls._load_salary(data, inflation)
+        cashflows: List[CashflowBase] = [salary] if salary is not None else []
         cashflows.extend(cls._load_lifecycle_cashflows(data))
         cashflows.extend(cls._load_insurances(data))
         cashflows = cls._index_cashflows(cashflows, inflation, sim[KEY_START_DATE])
-        cashflows.extend(cls._load_total_pension(data, tax, inflation))
+        cashflows.extend(cls._load_total_pension(data, tax, inflation, salary))
 
         reserve: Dict[str, Any] = data.get(KEY_RESERVE) or {}
         reserve_months = float(reserve.get("months_of_fixed_costs", 0.0)) if reserve.get("enabled", False) else 0.0
@@ -194,6 +203,36 @@ class ConfigMapper:
         return cashflows
 
     @staticmethod
+    def _load_salary(data: Dict[str, Any], inflation: InflationModel) -> CashflowBase | None:
+        """
+        Salary from ``lifecycle.salary``:
+
+        * ``mode: gross`` (default if ``yearly_fixed`` is given): yearly fixed gross salary in 12
+          payments plus ``yearly_bonus`` in ``bonus_month``, gross-to-net by the ``payroll``
+          section; grows with inflation and ``salary_real_growth``.
+        * ``mode: net``: ``monthly_net`` plus ``bonus_net`` in ``bonus_month`` (the former
+          ``monthly_amount`` is read as ``monthly_net``).
+        """
+        cfg: Dict[str, Any] | None = data.get(KEY_LIFECYCLE, {}).get(TYPE_SALARY)
+        if not cfg:
+            return None
+        retirement = cfg.get(KEY_RETIREMENT_DATE, data[KEY_SIMULATION][KEY_RETIREMENT_DATE])
+        bonus_month = int(cfg.get("bonus_month", 4))
+        mode = cfg.get("mode", "gross" if "yearly_fixed" in cfg else "net")
+        if mode == "gross":
+            growth = (1.0 + inflation.rate) * (1.0 + inflation.salary_real_growth) - 1.0
+            return GrossSalary(yearly_fixed=float(cfg["yearly_fixed"]), yearly_bonus=float(cfg.get("yearly_bonus", 0.0)),
+                               bonus_month=bonus_month, retirement_date=retirement,
+                               payroll=PayrollModel.from_dict(data.get(KEY_PAYROLL)),
+                               base_date=data[KEY_SIMULATION][KEY_START_DATE], growth=growth,
+                               tax_scale=inflation.tax_scale)
+        if mode == "net":
+            monthly = float(cfg.get("monthly_net", cfg.get("monthly_amount", 0.0)))
+            return NetSalary(monthly_net=monthly, bonus_net=float(cfg.get("bonus_net", 0.0)), bonus_month=bonus_month,
+                             retirement_date=retirement)
+        raise ValueError("salary mode must be 'gross' or 'net'")
+
+    @staticmethod
     def _index_cashflows(cashflows: List[CashflowBase], inflation: InflationModel,
                          start: Any) -> List[CashflowBase]:
         """
@@ -202,7 +241,9 @@ class ConfigMapper:
         """
         out: List[CashflowBase] = []
         for cf in cashflows:
-            if isinstance(cf, Salary):
+            if isinstance(cf, GrossSalary):
+                rate = 0.0  # grows itself (thresholds of the payroll must follow the tax scale)
+            elif isinstance(cf, NetSalary):
                 rate = (1.0 + inflation.rate) * (1.0 + inflation.salary_real_growth) - 1.0
             else:
                 rate = inflation.rate if inflation.expenses_indexed else 0.0
@@ -229,8 +270,8 @@ class ConfigMapper:
     # Pension handling
     # ----------------------
     @staticmethod
-    def _load_total_pension(data: Dict[str, Any], tax: TaxModel,
-                            inflation: InflationModel | None = None) -> List[CashflowBase]:
+    def _load_total_pension(data: Dict[str, Any], tax: TaxModel, inflation: InflationModel | None = None,
+                            salary: CashflowBase | None = None) -> List[CashflowBase]:
         """
         Create an aggregated TotalPension cashflow from all pension plans.
 
@@ -238,6 +279,7 @@ class ConfigMapper:
             data: Parsed YAML configuration.
             tax: Tax parameters (pension income tax, Rürup refund).
             inflation: Indexation of the public pension and of the tariff brackets.
+            salary: With a gross salary the Rürup refund is computed exactly from the payroll.
 
         Returns:
             List containing a single TotalPension instance,
@@ -302,7 +344,8 @@ class ConfigMapper:
             )
 
         return [TotalPension(pensions=pension_plans, retirement_date=retirement_date, tax=tax,
-                             tax_scale=inflation.tax_scale if inflation else None)]
+                             tax_scale=inflation.tax_scale if inflation else None,
+                             refund=_payroll_refund(salary) if isinstance(salary, GrossSalary) else None)]
 
     @staticmethod
     def _load_crra_params(data: Dict[str, Any]) -> Dict[str, float]:

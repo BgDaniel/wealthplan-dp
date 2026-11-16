@@ -21,7 +21,7 @@ KEY_APPLY_TERMINAL_PENALTY: str = "apply_terminal_penalty"
 KEY_PARAMS_HASH: str = "params_hash"
 
 # Part of the cache key: bump whenever the backward induction changes its results.
-SOLVER_VERSION: str = "lsmc-7"
+SOLVER_VERSION: str = "lsmc-8"
 
 TECHNICAL_DEFAULTS: Dict[str, Any] = {
     KEY_W_MAX: 3_000_000.0,

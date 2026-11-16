@@ -18,7 +18,10 @@ simulation_parameters:
 lifecycle:
   # Regular cashflows
   salary:
-    monthly_amount: 6800
+    mode: gross                # gross: yearly gross amounts, net via the payroll section; net: monthly_net + bonus_net
+    yearly_fixed: 120000       # fixed gross salary per year, paid in 12 monthly amounts
+    yearly_bonus: 32500        # yearly gross bonus (deterministic)
+    bonus_month: 4             # month of the bonus payment (1-12)
     retirement_date: 2055-07-01
 
   rent:
@@ -113,6 +116,23 @@ reserve:
   months_of_fixed_costs: 6         # kept in the savings account (not invested in equity)
 
 # ----------------------------
+# Payroll: gross -> net of the salary (employee shares, values 2025; ceilings grow with inflation)
+# ----------------------------
+payroll:
+  pension_rate: 0.093                    # public pension, employee share
+  unemployment_rate: 0.013               # unemployment insurance, employee share
+  pension_ceiling: 96600                 # Beitragsbemessungsgrenze RV/AV per year
+  health_insurance: statutory            # statutory or private
+  health_rate: 0.0855                    # statutory: 7.3 % + half of the Zusatzbeitrag
+  care_rate: 0.018                       # Pflegeversicherung employee share (childless: 0.024)
+  health_ceiling: 66150                  # Beitragsbemessungsgrenze KV/PV per year
+  private_premium_monthly: 0             # private: premium health + care per month
+  private_employer_subsidy_monthly: 0    # private: employer subsidy per month
+  church_tax_rate: 0.0                   # 0, 0.08 (BY, BW) or 0.09
+  werbungskosten: 1230                   # per year
+  basis_pension_max: 29344               # Höchstbetrag Basisvorsorge (Rürup room = this - 2 x RV contributions)
+
+# ----------------------------
 # Taxes
 # ----------------------------
 tax:
@@ -122,8 +142,8 @@ tax:
   tax_equity_returns: true
   income_tax_mode: tariff             # tariff (§32a EStG 2025 + Soli) or flat
   income_tax_rate_retirement: 0.20    # used with income_tax_mode: flat
-  marginal_tax_rate_working: 0.42     # Grenzsteuersatz: Rürup contributions are deducted at this rate
-  basis_pension_deduction_room: 11000 # remaining Basisvorsorge-Höchstbetrag per year after public pension contributions
+  marginal_tax_rate_working: 0.42     # Rürup refund rate if the salary is given net (gross: exact from payroll)
+  basis_pension_deduction_room: 11000 # Rürup deduction room if the salary is given net (gross: from payroll)
   pension_allowance_yearly: 102       # Werbungskosten-Pauschbetrag
 
 # ----------------------------

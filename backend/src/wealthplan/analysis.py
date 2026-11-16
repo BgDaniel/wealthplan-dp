@@ -102,7 +102,9 @@ def ruerup_vs_etf(opt, etf_ter: float = 0.002) -> Tuple[pd.DataFrame, Dict[str, 
     for t, m in enumerate(opt.months):
         if t < r_idx:
             c = sum(p.monthly_contribution(m) for p in plans)
-            outlay = c - tax.basis_pension_refund_monthly(c, tp.tax_scale(m))
+            refund = tp.refund(m, c) if (tp.refund is not None and c) else tax.basis_pension_refund_monthly(
+                c, tp.tax_scale(m))
+            outlay = c - refund
             rue[t] = etf[t] = -outlay
             k = (k + outlay) * (1.0 + r_m)
         else:

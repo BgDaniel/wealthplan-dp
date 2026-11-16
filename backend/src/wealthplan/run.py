@@ -60,6 +60,8 @@ def run_plan(data: Dict[str, Any], results_root: str | Path = "results", figures
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
     optimizer.quantiles().to_csv(run_dir / "quantiles.csv")
     optimizer.cashflow_items().to_csv(run_dir / "cashflows.csv")
+    with open(run_dir / "cashflow_categories.json", "w", encoding="utf-8") as f:
+        json.dump(optimizer.cashflow_categories(), f, indent=2)
     np.savez_compressed(run_dir / "policy.npz", **optimizer.policy_dict())
     if figures:
         from wealthplan.plots import save_figures

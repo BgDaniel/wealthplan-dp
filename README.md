@@ -105,6 +105,18 @@ only redo the forward simulation.
 * Not modelled: health / long-term care insurance of pensioners, church tax (add it to the
   capital gains rate), Vorabpauschale.
 
+## Salary and payroll (`lifecycle.salary`, YAML section `payroll`, `wealthplan.cashflows.payroll`)
+
+`mode: gross`: fixed yearly gross salary in 12 monthly payments plus a deterministic yearly bonus
+in `bonus_month`. Gross to net per year: employee contributions to pension / unemployment (up to
+96 600 €) and health / care insurance (statutory up to 66 150 €, or a private premium minus the
+employer subsidy), income tax §32a 2025 + Soli + church tax on gross − Werbungskosten −
+Vorsorgeaufwendungen. The bonus month receives the yearly net minus 12 × the monthly net of the
+fixed salary (marginal tax). The Rürup refund is computed exactly (tax without minus with
+deduction, room = Höchstbetrag − 2 × pension contributions). `mode: net`: `monthly_net` plus
+`bonus_net`. Fixed costs for the emergency reserve exclude the income tax and social security
+deducted from salary and pensions.
+
 ## Inflation (YAML section `inflation`, `wealthplan.economy.inflation`)
 
 All amounts of the configuration are in euros of the start date. With `rate` > 0 the salary

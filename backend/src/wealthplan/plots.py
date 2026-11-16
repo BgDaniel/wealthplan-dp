@@ -281,7 +281,8 @@ def ruerup_vs_etf_plot(opt, t) -> Figure:
 
 COMPOSITION = (("Salary", BLUE, ""), ("Pensions (gross)", "#5b8ef0", ""), ("Tax refund", "#9bbaf7", ""),
                ("Living costs", PURPLE, ""), ("Insurances", "#c3a8f3", "//"),
-               ("Pension contributions", "#7d55cf", ""), ("Income tax", "#5b3aa6", "xx"))
+               ("Pension contributions", "#7d55cf", ""), ("Social security", "#8f6ee0", ".."),
+               ("Income tax", "#5b3aa6", "xx"))
 
 
 def composition(opt, t) -> Figure:

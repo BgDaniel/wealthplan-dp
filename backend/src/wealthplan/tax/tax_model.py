@@ -81,6 +81,17 @@ class TaxModel:
     @staticmethod
     def tariff_2025(taxable_yearly: float) -> float:
         """Income tax §32a EStG 2025 (single assessment) plus Solidaritätszuschlag."""
+        tax = TaxModel.income_tax_2025(taxable_yearly)
+        return tax + TaxModel.soli(tax)
+
+    @staticmethod
+    def soli(income_tax: float) -> float:
+        """Solidaritätszuschlag: 5.5 % above the Freigrenze of 19 950 € tax, sliding zone 11.9 %."""
+        return 0.0 if income_tax <= 19_950 else min(0.055 * income_tax, 0.119 * (income_tax - 19_950))
+
+    @staticmethod
+    def income_tax_2025(taxable_yearly: float) -> float:
+        """Income tax §32a EStG 2025 (single assessment), without Soli."""
         x = float(int(max(taxable_yearly, 0.0)))
         if x <= 12_096:
             tax = 0.0
@@ -94,9 +105,7 @@ class TaxModel:
             tax = 0.42 * x - 10_911.92
         else:
             tax = 0.45 * x - 19_246.67
-        tax = float(int(tax))
-        soli = 0.0 if tax <= 19_950 else min(0.055 * tax, 0.119 * (tax - 19_950))
-        return tax + soli
+        return float(int(tax))
 
     def pension_income_tax_monthly(self, taxable_monthly: float, scale: float = 1.0) -> float:
         """

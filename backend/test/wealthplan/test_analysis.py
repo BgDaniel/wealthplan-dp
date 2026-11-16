@@ -51,6 +51,8 @@ class TestAnalysis(unittest.TestCase):
                                                         expected_return=0.07)
         data["stochastic"]["yearly_return"] = 0.07
         data["tax"] = {"tax_savings_interest": False, "tax_equity_returns": False, "marginal_tax_rate_working": 0.0}
+        # net salary: the Rürup refund then follows the (zero) marginal rate instead of the payroll
+        data["lifecycle"]["salary"] = {"mode": "net", "monthly_net": 6_000.0}
         opt = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(data))
         _, info = ruerup_vs_etf(opt, etf_ter=0.0)
         self.assertAlmostEqual(info["etf_capital_at_retirement"], info["ruerup_capital_at_retirement"],
