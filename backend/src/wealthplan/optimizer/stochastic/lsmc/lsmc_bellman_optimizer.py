@@ -357,7 +357,7 @@ class LSMCBellmanOptimizer:
         Parameters
         ----------
         run_config_id : str
-            Name of the run (cache namespace).
+            Name of the run.
         start_date, end_date, retirement_date : dt.date
             Plan horizon (month starts) and retirement month.
         initial_wealth : float
@@ -438,8 +438,9 @@ class LSMCBellmanOptimizer:
         self.wealth_grid = w_max * np.linspace(0.0, 1.0, n_wealth) ** 2
         self.equity_shares = np.linspace(0.0, max_equity_share, n_equity_shares)
 
-        self.cache = ResultCache(run_id=run_config_id, enabled=use_cache, params_hash=params_hash,
-                                 cache_root=cache_root)
+        # Cache folder keyed by the parameter hash only (not the run name): identical parameters
+        # under another name reuse the result.
+        self.cache = ResultCache(run_id="lsmc", enabled=use_cache, params_hash=params_hash, cache_root=cache_root)
 
         # outputs (populated by solve())
         d_max = regression_degree + 1

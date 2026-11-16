@@ -262,7 +262,7 @@ def result_page() -> None:
                 help="optimal consumption in the first month (on top of the fixed expenses)")
     m[2].metric("Equity share at retirement", _pct(summary["equity_share_retirement"]), help="median over paths")
     m[3].metric("Wealth at retirement", _keur(summary["wealth_retirement_median"]),
-                f'5 %: {_keur(summary["wealth_retirement_p05"])}', delta_color="off", help="median over paths")
+                help=f'median over paths; 5 % quantile {_keur(summary["wealth_retirement_p05"])}')
     m[4].metric("Consumption in retirement", f'{summary["consumption_retired_median"]:,.0f} €',
                 help="median monthly consumption after retirement")
     m[5].metric("Shortfall probability", _pct(summary["prob_shortfall"]),

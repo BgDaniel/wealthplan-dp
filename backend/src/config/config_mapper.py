@@ -1,3 +1,5 @@
+import copy
+import datetime as dt
 from typing import Any, Dict, List, Type
 
 from wealthplan.cashflows.cashflow_base import CashflowBase
@@ -91,8 +93,28 @@ class ConfigMapper:
     technical optimization parameters.
     """
 
+    @staticmethod
+    def normalize_dates(data: Any) -> Any:
+        """
+        Copy of the configuration with every ``*date`` value as ``datetime.date``.
+
+        YAML parses unquoted ISO dates itself, JSON (job files) and quoted YAML values
+        give strings.
+        """
+        if isinstance(data, dict):
+            return {
+                k: (dt.date.fromisoformat(str(v)[:10]) if k.endswith("date") and isinstance(v, (str, dt.datetime))
+                    else ConfigMapper.normalize_dates(v))
+                for k, v in data.items()
+            }
+        if isinstance(data, list):
+            return [ConfigMapper.normalize_dates(v) for v in data]
+        return copy.copy(data)
+
     @classmethod
     def map_yaml_to_params(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        data = cls.normalize_dates(data)
+
         # Base simulation parameters
         sim: Dict[str, Any] = data[KEY_SIMULATION]
 

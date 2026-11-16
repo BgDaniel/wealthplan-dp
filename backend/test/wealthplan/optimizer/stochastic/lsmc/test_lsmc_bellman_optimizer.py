@@ -1,4 +1,5 @@
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -114,8 +115,10 @@ class TestLSMCBellmanOptimizer(unittest.TestCase):
             data = small_params(use_cache=True)
             first = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(copy.deepcopy(data)), cache_root=tmp)
             first.solve()
-            second = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(copy.deepcopy(data)),
-                                          cache_root=tmp)
+            renamed = copy.deepcopy(data)
+            renamed["simulation_parameters"]["run_config_id"] = "renamed"  # name is not part of the key
+            renamed["stochastic"]["n_sims_oos"] = 300  # forward-only parameter
+            second = LSMCBellmanOptimizer(**LSMCConfigMapper.map_yaml_to_params(renamed), cache_root=tmp)
             second.solve()
             self.assertFalse(first.from_cache)
             self.assertTrue(second.from_cache)
@@ -129,6 +132,17 @@ class TestLSMCBellmanOptimizer(unittest.TestCase):
         self.assertEqual(solver_params_hash(a), solver_params_hash(b))
         b["utility_function"]["gamma"] = 3.0
         self.assertNotEqual(solver_params_hash(a), solver_params_hash(b))
+
+    def test_json_round_trip(self) -> None:
+        """Job files store the parameters as JSON: dates become strings."""
+        data = small_params()
+        restored = json.loads(json.dumps(data, default=str))
+        a = LSMCConfigMapper.map_yaml_to_params(data)
+        b = LSMCConfigMapper.map_yaml_to_params(restored)
+        self.assertEqual(a["start_date"], b["start_date"])
+        self.assertEqual(a["params_hash"], b["params_hash"])
+        opt = LSMCBellmanOptimizer(**b)
+        np.testing.assert_allclose(opt.cf, LSMCBellmanOptimizer(**a).cf)
 
 
 if __name__ == "__main__":
