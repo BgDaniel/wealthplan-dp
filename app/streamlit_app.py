@@ -119,6 +119,15 @@ CSS = """
   .action .label {color: #9aa3c7; font-size: 0.8rem;}
   .action .value {color: #e7e9f5; font-size: 1.6rem; font-weight: 600;}
   .action .detail {color: #9aa3c7; font-size: 0.85rem;}
+  .kpi {background: #131a33; border: 1px solid #1f2747; border-radius: 10px; padding: 0.9rem 1.1rem;
+        height: 100%;}
+  .kpi .label {color: #9aa3c7; font-size: 0.8rem;}
+  .kpi .value {color: #e7e9f5; font-size: 1.75rem; font-weight: 600; line-height: 1.3;}
+  .kpi .delta {font-size: 0.85rem; color: #9aa3c7;}
+  .kpi .delta.good {color: #5fc79a;}
+  .kpi .delta.bad {color: #e66767;}
+  .ci {color: #8f86c9; font-size: 0.62em; font-weight: 400; white-space: nowrap; margin-left: 0.35em;}
+  .detail .ci, .facts .ci {font-size: 0.92em;}
 </style>
 """
 
@@ -469,6 +478,49 @@ def _trade(amount: float) -> str:
     return f"buy {_eur(amount)}" if amount > 0 else f"sell {_eur(-amount)}"
 
 
+Band = tuple[float, float] | None
+
+
+def _band(quant: pd.Series, name: str, scale: float, show: bool, shift: float = 0.0) -> Band:
+    """5 %–95 % range of a simulated quantity (real euros × ``scale`` + ``shift``), None if not shown."""
+    lo, hi = quant.get(f"{name}_p05"), quant.get(f"{name}_p95")
+    if not show or lo is None or hi is None or not (np.isfinite(lo) and np.isfinite(hi)):
+        return None
+    return scale * float(lo) + shift, scale * float(hi) + shift
+
+
+def _ci(band: Band, signed: bool = False, percent: bool = False) -> str:
+    """Small bracketed range behind a value, e.g. ``(3,410 – 4,480 €)``."""
+    if band is None:
+        return ""
+    if percent:
+        text = f"{100 * band[0]:.0f} – {100 * band[1]:.0f} %"
+    elif signed:  # trades: sell (negative) / buy (positive)
+        lo, hi = band
+        if hi <= 0.5:
+            text = f"sell {-hi:,.0f} – {-lo:,.0f} €"
+        elif lo >= -0.5:
+            text = f"buy {lo:,.0f} – {hi:,.0f} €"
+        else:
+            text = f"sell {-lo:,.0f} … buy {hi:,.0f} €"
+    else:
+        text = f"{band[0]:,.0f} – {band[1]:,.0f} €"
+    return f'<span class="ci" title="90 % range of the simulated paths (5th–95th percentile)">({text})</span>'
+
+
+def _kpi(label: str, value: float, band: Band = None, delta: str | None = None, inverse: bool = False,
+         help: str = "") -> str:
+    """Metric card with an optional 90 % range in small type behind the value."""
+    delta_html = ""
+    if delta and delta.lstrip("+-").startswith("0 "):
+        delta_html = '<div class="delta">= unchanged</div>'
+    elif delta:
+        good = (delta.startswith("+")) != inverse
+        delta_html = f'<div class="delta {"good" if good else "bad"}">{"▲" if delta.startswith("+") else "▼"} {delta}</div>'
+    return (f'<div class="kpi" title="{help}"><div class="label">{label}</div>'
+            f'<div class="value">{_eur(value)}{_ci(band)}</div>{delta_html}</div>')
+
+
 def _action(label: str, value: str, detail: str, kind: str = "") -> str:
     return (f'<div class="action {kind}"><div class="label">{label}</div><div class="value">{value}</div>'
             f'<div class="detail">{detail}</div></div>')
@@ -511,6 +563,10 @@ STEERING_HELP = """
   Net cashflow − consumption is invested (positive) or withdrawn from your holdings (negative).
 * **Actions** – how much to buy / sell of equity and savings account so that after this month
   the optimal equity share and the emergency reserve are met.
+* **Ranges in brackets** – for future months: the 90 % range (5th–95th percentile) of the
+  quantity over the simulated market paths. Your holdings at that time are uncertain, and with
+  them the consumption, the target holdings and the trades. Salary, fixed costs and the
+  deterministic pensions have no range.
 * All amounts are nominal euros of the chosen month; the line below the figures converts them to
   the purchasing power of the start year.
 """
@@ -552,6 +608,8 @@ def steering_page() -> None:
     default = min(current + 1, len(months) - 1) if current is not None else 0
     month = c_month.selectbox("Month", months, index=default, format_func=lambda d: d.strftime("%m/%Y"))
     t = months.index(month)
+    # months after the current one are uncertain: show the 90 % range of the simulated paths
+    show = t > (current if current is not None else 0)
     all_items = pd.read_csv(run_dir / "cashflows.csv", index_col=0)
     items = all_items.iloc[t]
     quant = pd.read_csv(run_dir / "quantiles.csv", index_col=0).iloc[t]
@@ -575,8 +633,13 @@ def steering_page() -> None:
         c1, c2, c3 = st.columns(3)
         eq_now = _money_input(c1, "Equity (ETFs) [€]", round(max(eq_default, 0.0), -2))
         sav_now = _money_input(c2, "Savings account [€]", round(max(sav_default, 0.0), -2))
+        hold_ranges = ""
+        if show:
+            hold_ranges = (f'<br>Simulated range: equity {_ci(_band(quant, "equity_before", price, show))}'
+                           f'<br>savings {_ci(_band(quant, "savings_before", price, show))}'
+                           f'<br>total {_ci(_band(quant, "wealth", price, show))}')
         c3.markdown(f'<div class="facts">Defaults: {"configuration" if t == 0 else "median of the simulated paths"}'
-                    f'<br>Total <b>{_eur(eq_now + sav_now)}</b></div>', unsafe_allow_html=True)
+                    f'<br>Total <b>{_eur(eq_now + sav_now)}</b>{hold_ranges}</div>', unsafe_allow_html=True)
         # fund-linked Rürup: its contract value (before) / pension (after the start) is a state of
         # the policy and, in the payout phase, a path-dependent income
         state, extra_nominal = 1.0, 0.0
@@ -585,6 +648,9 @@ def steering_page() -> None:
             if t < r_idx:
                 cap_default = price * float(quant.get("ruerup_capital_p50", 0.0) or 0.0)
                 cap = _money_input(c1, "Rürup contract value [€]", round(max(cap_default, 0.0), -2), help="from your Rürup statement (Vertragsguthaben)")
+                if show:
+                    c2.markdown(f'<div class="facts">Rürup contract value, simulated '
+                                f'{_ci(_band(quant, "ruerup_capital", price, show))}</div>', unsafe_allow_html=True)
                 state = cap / price + 1.0
             else:
                 gross_default = price * float(quant.get("ruerup_gross_pension_p50", 0.0) or 0.0)
@@ -596,7 +662,8 @@ def steering_page() -> None:
                 items = items.copy()
                 items["Rürup pension (net, simulated)"] = extra_nominal
                 c2.markdown(f'<div class="facts">net after the additional income tax: <b>{_eur(extra_nominal)}</b>'
-                            f'</div>', unsafe_allow_html=True)
+                            f'{_ci(_band(quant, "ruerup_net_pension", price, show))}<br>gross, simulated '
+                            f'{_ci(_band(quant, "ruerup_gross_pension", price, show))}</div>', unsafe_allow_html=True)
 
     d = decide(policy, t, (eq_now + sav_now) / price, state, extra_nominal / price, eq_now / price)
     for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings",
@@ -626,16 +693,31 @@ def steering_page() -> None:
                   "net": _signed(d["net_cashflow"] - ref_d["net_cashflow"] * ref_price),
                   "consumption": _signed(d["consumption"] - ref_d["consumption"] * ref_price) if same_phase else None}
 
+    # only the fund-linked Rürup pension makes income / net cashflow stochastic
+    income_band = net_band = None
+    if extra_nominal:
+        income_band = _band(quant, "ruerup_net_pension", price, show, income - extra_nominal)
+        net_band = _band(quant, "ruerup_net_pension", price, show, d["net_cashflow"] - extra_nominal)
     m = st.columns(4)
-    m[0].metric("Net income", _eur(income), deltas["income"],
-                help="salary / bonus / pensions after income tax and social security, plus tax refunds")
-    m[1].metric("Fixed costs", _eur(fixed), deltas["fixed"], delta_color="inverse",
-                help="rent, living costs, insurances, pension contributions")
-    m[2].metric("Net cashflow", _eur(d["net_cashflow"]), deltas["net"], help="net income − fixed costs")
-    m[3].metric("Consumption allowed", _eur(d["consumption"]), deltas["consumption"],
-                help="optimal discretionary consumption on top of the fixed costs")
+    m[0].markdown(_kpi("Net income", income, income_band, deltas["income"],
+                       help="salary / bonus / pensions after income tax and social security, plus tax refunds"),
+                  unsafe_allow_html=True)
+    m[1].markdown(_kpi("Fixed costs", fixed, None, deltas["fixed"], inverse=True,
+                       help="rent, living costs, insurances, pension contributions"), unsafe_allow_html=True)
+    m[2].markdown(_kpi("Net cashflow", d["net_cashflow"], net_band, deltas["net"], help="net income − fixed costs"),
+                  unsafe_allow_html=True)
+    m[3].markdown(_kpi("Consumption allowed", d["consumption"], _band(quant, "consumption", price, show),
+                       deltas["consumption"], help="optimal discretionary consumption on top of the fixed costs"),
+                  unsafe_allow_html=True)
+    notes = []
     if ref is not None:
-        st.caption(f"Changes compared with {months[ref]:%B %Y} (current month), same holdings.")
+        notes.append(f"Changes compared with {months[ref]:%B %Y} (current month), same holdings.")
+    if show:
+        notes.append("In brackets: 90 % range (5th–95th percentile) over the simulated paths alive in this month, "
+                     "i.e. the market uncertainty until then. The large figure is the decision for the holdings "
+                     "entered above; salary, fixed costs and the deterministic pensions have no range.")
+    if notes:
+        st.caption(" ".join(notes))
     with st.expander("What do these numbers mean?", expanded=False):
         st.markdown(STEERING_HELP)
     # year view as in the consumption figure: bonus and yearly insurances spread over the year
@@ -663,17 +745,26 @@ def steering_page() -> None:
         st.subheader("Actions")
         if d["shortfall"] > 0:
             st.error(f"The fixed costs exceed income and wealth by {_eur(d['shortfall'])}.")
-        st.markdown(_action("Equity (ETFs)", _trade(d["equity"] - eq_now),
-                            f"target {_eur(d['equity'])} · {100 * d['equity_share']:.0f} % of the invested "
-                            f"wealth", "equity"), unsafe_allow_html=True)
+        st.markdown(_action("Equity (ETFs)", _trade(d["equity"] - eq_now)
+                            + _ci(_band(quant, "equity_trade", price, show), signed=True),
+                            f"target {_eur(d['equity'])}{_ci(_band(quant, 'equity_amount', price, show))} · "
+                            f"{100 * d['equity_share']:.0f} %{_ci(_band(quant, 'equity_share', 1.0, show), percent=True)}"
+                            f" of the invested wealth", "equity"), unsafe_allow_html=True)
         reserve_note = f" · incl. emergency reserve {_eur(reserve)}" if reserve > 0 else ""
-        st.markdown(_action("Savings account", _trade(d["savings"] - sav_now),
-                            f"target {_eur(d['savings'])} · {100 * (1 - d['equity_share']):.0f} % of the invested "
-                            f"wealth{reserve_note}"), unsafe_allow_html=True)
-        cost_note = f" − trading costs {_eur(d['trading_cost'])}" if d.get("trading_cost", 0.0) > 0.5 else ""
-        st.markdown(_action("Invested after this month", _eur(d["invested"]),
+        st.markdown(_action("Savings account", _trade(d["savings"] - sav_now)
+                            + _ci(_band(quant, "savings_trade", price, show), signed=True),
+                            f"target {_eur(d['savings'])}{_ci(_band(quant, 'savings_amount', price, show))} · "
+                            f"{100 * (1 - d['equity_share']):.0f} % of the invested wealth{reserve_note}"),
+                    unsafe_allow_html=True)
+        cost_note = ""
+        if d.get("trading_cost", 0.0) > 0.5:
+            cost_note = f" − trading costs {_eur(d['trading_cost'])}{_ci(_band(quant, 'trading_cost', price, show))}"
+        st.markdown(_action("Invested after this month", _eur(d["invested"])
+                            + _ci(_band(quant, "invested", price, show)),
                             f"holdings {_eur(eq_now + sav_now)} + net cashflow {_eur(d['net_cashflow'])} − "
                             f"consumption {_eur(d['consumption'])}{cost_note}"), unsafe_allow_html=True)
+        if show:
+            st.caption("Ranges in brackets: 90 % of the simulated paths (5th–95th percentile).")
         st.pyplot(_allocation_figure((eq_now, sav_now), (d["equity"], d["savings"])), width="stretch")
     with right:
         st.subheader("Cashflows of the month")

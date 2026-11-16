@@ -1141,7 +1141,7 @@ class LSMCBellmanOptimizer:
         return out
 
     def quantiles(self, q: tuple = (5, 25, 50, 75, 95)) -> pd.DataFrame:
-        """Monthly quantiles and means of wealth, consumption, equity share and equity amount."""
+        """Monthly quantiles and means of wealth, consumption, equity share, holdings and trades (real euros)."""
         cols: Dict[str, Any] = {"age": self.age_grid, "net_cashflow": self.cf,
                                 "alive": np.nanmean(self.survival_paths, axis=0)}
         series = {"wealth": self.opt_wealth.values, "consumption": self.opt_consumption.values,
@@ -1150,6 +1150,14 @@ class LSMCBellmanOptimizer:
                   "equity_share": self.opt_equity_share.values,
                   "equity_amount": self.opt_equity_share.values * self.opt_invested.values,
                   "equity_before": self.opt_equity_before.values, "savings_before": self.opt_savings_before.values}
+        # what the steering page shows per month: holdings after trading and the trades themselves
+        invested = self.opt_invested.values
+        series["invested"] = invested
+        series["savings_amount"] = (1.0 - self.opt_equity_share.values) * invested
+        series["equity_trade"] = series["equity_amount"] - series["equity_before"]
+        series["savings_trade"] = series["savings_amount"] - series["savings_before"]
+        if not self.opt_trading_cost.empty:
+            series["trading_cost"] = self.opt_trading_cost.values
         with np.errstate(all="ignore"):
             for name, data in series.items():
                 valid = np.isfinite(data).any(axis=1)
