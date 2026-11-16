@@ -50,23 +50,38 @@ def _euro(ax) -> None:
 OUT_OF_MONEY = "#e66767"  # status colour (critical), always with a text label
 
 
-def _mark_out_of_money(ax, opt, t: Dict[str, str], threshold: float = 0.05) -> None:
+OUT_OF_MONEY_LEVELS = ((0.05, 0.10), (0.25, 0.22), (0.50, 0.38))  # (share of paths, fill opacity)
+
+
+def _mark_out_of_money(ax, opt, t: Dict[str, str]) -> None:
     """
-    Hatch the ages from which at least ``threshold`` of the paths alive have been out of money
-    (fixed costs not payable) at least once, with a label.
+    Shade the ages by the share of paths alive that have been out of money (fixed costs not
+    payable) at least once: light red from 5 %, stronger from 25 %, strongest from 50 %, hatched
+    and labelled (colour is never the only cue).
     """
     if opt.opt_shortfall.empty:
         return
     oom = opt.out_of_money()
-    hit = np.where((oom["share_ever"].values >= threshold) & (oom["alive_paths"].values >= 20))[0]
-    if not hit.size:
-        return
-    a0 = opt.age_grid[hit[0]]
-    share_end = float(oom["share_ever"].values[hit[-1]])
-    ax.axvspan(a0, opt.age_grid[-1], facecolor="none", edgecolor=OUT_OF_MONEY, hatch="//", lw=0, alpha=0.45)
-    ax.axvline(a0, color=OUT_OF_MONEY, lw=1.2)
-    ax.text(a0, ax.get_ylim()[1], f" ⚠ out of money: ≥{100 * threshold:.0f} % of paths from age {a0:.0f} "
-            f"(up to {100 * share_end:.0f} %)", color=OUT_OF_MONEY, va="top", ha="left", fontsize=9)
+    share = oom["share_ever"].values
+    enough = oom["alive_paths"].values >= 20
+    ages = opt.age_grid
+    first = None
+    for level, alpha in OUT_OF_MONEY_LEVELS:
+        hit = np.where((share >= level) & enough)[0]
+        if not hit.size:
+            break
+        a0 = ages[hit[0]]
+        ax.axvspan(a0, ages[-1], facecolor=OUT_OF_MONEY, alpha=alpha, lw=0, zorder=0)
+        ax.axvline(a0, color=OUT_OF_MONEY, lw=1.0, alpha=0.9)
+        ax.text(a0, ax.get_ylim()[1] * (0.93 if level == 0.05 else 0.86 if level == 0.25 else 0.79),
+                f" ≥{100 * level:.0f} %", color=OUT_OF_MONEY, va="top", ha="left", fontsize=8.5)
+        if first is None:
+            first = a0
+    if first is not None:
+        ax.axvspan(first, ages[-1], facecolor="none", edgecolor=OUT_OF_MONEY, hatch="//", lw=0, alpha=0.35, zorder=0)
+        peak = float(np.max(share[enough])) if enough.any() else 0.0
+        ax.text(first, ax.get_ylim()[1], f" ⚠ out of money from age {first:.0f} (up to {100 * peak:.0f} % of "
+                f"the paths alive)", color=OUT_OF_MONEY, va="top", ha="left", fontsize=9)
 
 
 def _retirement(ax, opt, t: Dict[str, str]) -> None:

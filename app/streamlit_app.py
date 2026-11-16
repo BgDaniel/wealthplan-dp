@@ -95,7 +95,8 @@ FIGURE_HELP = {
     "10_depletion": "Among the paths alive: share with wealth below 6 months of fixed costs, share where the "
                     "fixed costs cannot be paid this month, and share that has been out of money at least once "
                     "(red dotted). Low wealth rises towards the plan end because the plan consumes the rest. In all "
-                    "figures the ages from which ≥ 5 % of the paths have been out of money are hatched red.",
+                    "figures the ages are shaded red once ≥ 5 %, darker once ≥ 25 % and darkest once ≥ 50 % of "
+                    "the paths have been out of money.",
     "11_taxes": "Taxes per year: capital gains tax on interest and ETF returns (median and 25–75 %), income tax "
                 "on pensions (incl. the Rürup part), Rürup tax refund as negative tax.",
     "12_ruerup": "Rürup contract capital on the simulated ETF paths until the pension start (median and bands) "
@@ -424,7 +425,7 @@ def result_page() -> None:
                 help="share of paths where wealth + net cashflow could not pay the fixed costs at least once "
                      "(the model then sets consumption and holdings to 0 and does not carry the gap as debt); "
                      f"mean unpaid fixed costs {_eur(summary.get('unpaid_fixed_costs_mean', 0.0))}. "
-                     "Figures hatch the ages from which ≥ 5 % of the paths have been out of money.")
+                     "Figures shade the ages red from 5 %, darker from 25 % and 50 % of the paths out of money.")
 
     fig_dir = run_dir / "figures"
     figures = sorted(fig_dir.glob("*.png"))

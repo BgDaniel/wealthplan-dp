@@ -88,8 +88,8 @@ the random drift of a single month.
 **Shortfall / out of money.** If w + y < 0 the fixed expenses cannot be paid: c = 0, x = 0
 (holdings empty) and each missing euro costs `shortfall_penalty` utility; the gap is not carried
 as debt. Results report the share of paths out of money at least once, the age from which
-≥ 5 % of the paths are affected and the mean unpaid fixed costs; the figures hatch those ages
-red. The last plan month is not counted (the plan spends the wealth down to its end date).
+≥ 5 % of the paths are affected and the mean unpaid fixed costs; the figures shade those ages
+red, darker from 25 % and 50 % of the paths. The last plan month is not counted (the plan spends the wealth down to its end date).
 
 **Cache.** The regression coefficients per month are stored in `.cache/lsmc_<hash>/`. The
 hash covers every parameter of the backward induction plus a solver version, but not
