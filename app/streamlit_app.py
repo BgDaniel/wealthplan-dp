@@ -600,8 +600,9 @@ def steering_page() -> None:
                 c2.markdown(f'<div class="facts">net after the additional income tax: <b>{_eur(extra_nominal)}</b>'
                             f'</div>', unsafe_allow_html=True)
 
-    d = decide(policy, t, (eq_now + sav_now) / price, state, extra_nominal / price)
-    for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings"):
+    d = decide(policy, t, (eq_now + sav_now) / price, state, extra_nominal / price, eq_now / price)
+    for key in ("net_cashflow", "resources", "shortfall", "consumption", "invested", "equity", "savings",
+                "trading_cost"):
         d[key] *= price  # back to nominal euros of the month
     reserve = price * float(policy["reserve"][t]) if "reserve" in policy else 0.0
     cat_file = run_dir / "cashflow_categories.json"
@@ -658,9 +659,10 @@ def steering_page() -> None:
         st.markdown(_action("Savings account", _trade(d["savings"] - sav_now),
                             f"target {_eur(d['savings'])} · {100 * (1 - d['equity_share']):.0f} % of the invested "
                             f"wealth{reserve_note}"), unsafe_allow_html=True)
+        cost_note = f" − trading costs {_eur(d['trading_cost'])}" if d.get("trading_cost", 0.0) > 0.5 else ""
         st.markdown(_action("Invested after this month", _eur(d["invested"]),
                             f"holdings {_eur(eq_now + sav_now)} + net cashflow {_eur(d['net_cashflow'])} − "
-                            f"consumption {_eur(d['consumption'])}"), unsafe_allow_html=True)
+                            f"consumption {_eur(d['consumption'])}{cost_note}"), unsafe_allow_html=True)
         st.pyplot(_allocation_figure((eq_now, sav_now), (d["equity"], d["savings"])), width="stretch")
     with right:
         st.subheader("Cashflows of the month")
@@ -936,6 +938,13 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
             n_oos = c2.number_input("Out-of-sample paths", value=int(sto.get("n_sims_oos", sto["n_sims"])),
                                     min_value=10, step=1000)
             seed = c3.number_input("Seed", value=int(sto.get("seed") or 0), min_value=0)
+            trading = data.get("trading") or {}
+            buy_cost = c1.number_input("ETF buy cost [%]", value=100 * float(trading.get("buy_cost", 0.0)),
+                                       min_value=0.0, max_value=10.0, step=0.05, format="%.2f",
+                                       help="share of the purchased amount (order fee, spread, Ausgabeaufschlag)")
+            sell_cost = c2.number_input("ETF sell cost [%]", value=100 * float(trading.get("sell_cost", 0.0)),
+                                        min_value=0.0, max_value=10.0, step=0.05, format="%.2f",
+                                        help="share of the sold amount; the savings account is free")
             surv_seed = c4.number_input("Mortality seed", value=int(surv.get("seed") or 0), min_value=0)
 
         with tab_num:
@@ -1013,6 +1022,7 @@ def _config_form(name: str, data: dict[str, Any], is_new: bool) -> None:
                             "expenses_indexed": bool(exp_indexed), "public_pension_indexation": pens_index / 100.0,
                             "tax_brackets_indexed": bool(brackets_indexed)}
         new["reserve"] = {"enabled": bool(reserve_on), "months_of_fixed_costs": reserve_months}
+        new["trading"] = {"buy_cost": buy_cost / 100.0, "sell_cost": sell_cost / 100.0}
         new["technical"] = {"w_max": w_max, "n_wealth": int(n_wealth), "n_equity_shares": int(n_shares),
                             "max_equity_share": max_share, "regression_degree": int(degree),
                             "shortfall_penalty": penalty, "apply_terminal_penalty": bool(terminal),

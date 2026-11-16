@@ -31,6 +31,7 @@ def small_params(**technical) -> dict:
     data["total_pension"]["retirement_date"] = data["simulation_parameters"]["retirement_date"]
     data["stochastic"].update(n_sims=200, n_sims_oos=300)
     data["reserve"] = {"enabled": False}  # tests of the pure policy; the reserve has its own test
+    data["trading"] = {"buy_cost": 0.0, "sell_cost": 0.0}  # trading costs have their own tests
     data["technical"].update({"n_wealth": 60, "n_equity_shares": 6, "w_max": 1_000_000.0, "use_cache": False,
                               **technical})
     return data

@@ -126,7 +126,7 @@ def _max_share(x: float, reserve: float) -> float:
 
 @nb.njit(parallel=True, cache=True)
 def best_continuation(q: np.ndarray, proj: np.ndarray, grid: np.ndarray, shares: np.ndarray,
-                      reserve: float) -> np.ndarray:
+                      reserve: float):
     """
     Fitted continuation value per path and grid point, maximised over the admissible equity
     shares (those keeping the emergency reserve in the savings account; 0 % is always allowed).
@@ -141,15 +141,19 @@ def best_continuation(q: np.ndarray, proj: np.ndarray, grid: np.ndarray, shares:
 
     Returns
     -------
-    np.ndarray, shape (n_sims, n_w)
+    value : np.ndarray, shape (n_sims, n_w)
         max_k sum_b q[s, b] * proj[b, j, k] over admissible k.
+    share : np.ndarray, shape (n_sims, n_w)
+        The maximising equity share.
     """
     n_sims, d = q.shape
     _, n_w, n_a = proj.shape
     out = np.empty((n_sims, n_w))
+    share = np.empty((n_sims, n_w))
     for s in nb.prange(n_sims):
         for j in range(n_w):
             best = -np.inf
+            best_a = 0.0
             cap = _max_share(grid[j], reserve) + 1e-12
             for k in range(n_a):
                 if k > 0 and shares[k] > cap:
@@ -164,14 +168,17 @@ def best_continuation(q: np.ndarray, proj: np.ndarray, grid: np.ndarray, shares:
                         vc = v0 + w * (v1 - v0)
                         if vc > best:
                             best = vc
+                            best_a = min(cap, 1.0)
                     break
                 v = 0.0
                 for b in range(d):
                     v += q[s, b] * proj[b, j, k]
                 if v > best:
                     best = v
+                    best_a = shares[k]
             out[s, j] = best
-    return out
+            share[s, j] = best_a
+    return out, share
 
 
 @nb.njit(cache=True)
@@ -234,6 +241,136 @@ def _optimal_investment(m: float, grid: np.ndarray, h: np.ndarray, l: int, beta:
     return x_best, f_best, l
 
 
+@nb.njit(cache=True)
+def _hval(z: float, grid: np.ndarray, h: np.ndarray) -> float:
+    """Continuation value at z: linear between grid points, linear extrapolation above."""
+    n = grid.shape[0]
+    if z >= grid[n - 1]:
+        k = n - 2
+    elif z <= grid[0]:
+        k = 0
+    else:
+        lo, hi = 0, n - 1
+        while hi - lo > 1:
+            mid = (lo + hi) >> 1
+            if grid[mid] <= z:
+                lo = mid
+            else:
+                hi = mid
+        k = lo
+    return h[k] + (z - grid[k]) * (h[k + 1] - h[k]) / (grid[k + 1] - grid[k])
+
+
+@nb.njit(cache=True)
+def _side_optimum(m: float, a: float, b: float, zlo: float, zhi: float, grid: np.ndarray, h: np.ndarray, l: int,
+                  beta: float, gamma: float, epsilon: float):
+    """
+    max over z in [zlo, zhi] of u(m - (z - b) / a) + beta * h(z): z is the invested amount after
+    trading costs, x = (z - b) / a the cash put into the portfolio (buy side a = 1 - k, b = k w;
+    sell side a = 1 + k, b = -k w). Concave in z: a forward pointer l over the grid finds the best
+    grid point, the neighbouring cells are solved in closed form (u'(c) / a = beta * slope).
+
+    Returns (z, value, l).
+    """
+    n = grid.shape[0]
+    best_z = zlo
+    best_f = crra_utility_scalar(m - (zlo - b) / a, gamma, epsilon) + beta * _hval(zlo, grid, h)
+    f_hi = crra_utility_scalar(m - (zhi - b) / a, gamma, epsilon) + beta * _hval(zhi, grid, h)
+    if f_hi > best_f:
+        best_z, best_f = zhi, f_hi
+    # pointer over the grid points inside [zlo, zhi]
+    while l < n - 1 and grid[l] < zlo:
+        l += 1
+    while l > 0 and grid[l - 1] >= zlo:
+        l -= 1
+    if l < n and zlo <= grid[l] <= zhi:
+        f = crra_utility_scalar(m - (grid[l] - b) / a, gamma, epsilon) + beta * h[l]
+        while l + 1 < n and grid[l + 1] <= zhi:
+            f_next = crra_utility_scalar(m - (grid[l + 1] - b) / a, gamma, epsilon) + beta * h[l + 1]
+            if f_next < f:
+                break
+            l += 1
+            f = f_next
+        if f > best_f:
+            best_z, best_f = grid[l], f
+    # closed form in the cells around the best point
+    k0 = max(min(l, n - 2) - 1, 0)
+    for k in range(k0, min(k0 + 3, n - 1)):
+        za = max(grid[k], zlo)
+        zb = min(grid[k + 1], zhi) if k + 1 < n - 1 else zhi
+        if zb <= za:
+            continue
+        slope = (h[k + 1] - h[k]) / (grid[k + 1] - grid[k])
+        if slope <= 0.0:
+            z = za
+        else:
+            c = (beta * a * slope) ** (-1.0 / gamma) - epsilon
+            z = min(max(a * (m - c) + b, za), zb)
+        f = crra_utility_scalar(m - (z - b) / a, gamma, epsilon) + beta * (h[k] + (z - grid[k]) * slope)
+        if f > best_f:
+            best_z, best_f = z, f
+    return best_z, best_f, l
+
+
+@nb.njit(cache=True)
+def _optimal_with_costs(m: float, w: float, grid: np.ndarray, h: np.ndarray, a_w: float, buy_cost: float,
+                        sell_cost: float, beta: float, gamma: float, epsilon: float, lb: int, ls: int):
+    """
+    Consumption / investment with proportional ETF trading costs on the new money (backward
+    approximation, keeps wealth as the only state): saving w + y - c > w buys the equity part
+    a_w (w + y - c - w) at ``buy_cost``, a withdrawal sells it at ``sell_cost``; the savings account
+    is free. Candidates: no trade (x = w), best buy and best sell.
+
+    Returns (x, z, value, lb, ls): x cash invested, z invested after costs.
+    """
+    kb = buy_cost * a_w
+    ks = sell_cost * a_w
+    best_x, best_z, best_f = 0.0, 0.0, -np.inf
+    if w <= m:  # no trade: consume exactly the net cashflow
+        f = crra_utility_scalar(m - w, gamma, epsilon) + beta * _hval(w, grid, h)
+        best_x, best_z, best_f = w, w, f
+    if m > w:  # buy side: x in [w, m]
+        a = 1.0 - kb
+        b = kb * w
+        z, f, lb = _side_optimum(m, a, b, w, a * m + b, grid, h, lb, beta, gamma, epsilon)
+        if f > best_f:
+            best_x, best_z, best_f = (z - b) / a, z, f
+    x_max = min(w, m)  # sell side: x in [k w / (1 + k), min(w, m)]
+    a = 1.0 + ks
+    b = -ks * w
+    z_hi = a * x_max + b
+    if z_hi > 0.0:
+        z, f, ls = _side_optimum(m, a, b, 0.0, z_hi, grid, h, ls, beta, gamma, epsilon)
+        if f > best_f:
+            best_x, best_z, best_f = (z - b) / a, z, f
+    elif best_f == -np.inf:  # selling everything does not even cover the costs
+        x = min(x_max, -b / a)
+        best_x, best_z = x, 0.0
+        best_f = crra_utility_scalar(m - x, gamma, epsilon) + beta * h[0]
+    return best_x, best_z, best_f, lb, ls
+
+
+@nb.njit(parallel=True, cache=True)
+def bellman_values_costs(grid: np.ndarray, cont: np.ndarray, share: np.ndarray, y: np.ndarray, beta: float,
+                         gamma: float, epsilon: float, shortfall_penalty: float, buy_cost: float,
+                         sell_cost: float) -> np.ndarray:
+    """``bellman_values`` with proportional ETF trading costs (``_optimal_with_costs``)."""
+    n_sims, n_w = cont.shape
+    out = np.empty((n_sims, n_w))
+    for s in nb.prange(n_sims):
+        h = cont[s]
+        lb = 0
+        ls = 0
+        for j in range(n_w):
+            m = grid[j] + y[s]
+            if m <= 0.0:
+                out[s, j] = crra_utility_scalar(0.0, gamma, epsilon) + beta * h[0] + shortfall_penalty * m
+                continue
+            _, _, out[s, j], lb, ls = _optimal_with_costs(m, grid[j], grid, h, share[s, j], buy_cost, sell_cost,
+                                                          beta, gamma, epsilon, lb, ls)
+    return out
+
+
 @nb.njit(parallel=True, cache=True)
 def bellman_values(grid: np.ndarray, cont: np.ndarray, y: np.ndarray, beta: float, gamma: float, epsilon: float,
                    shortfall_penalty: float) -> np.ndarray:
@@ -270,8 +407,43 @@ def bellman_values(grid: np.ndarray, cont: np.ndarray, y: np.ndarray, beta: floa
 
 
 @nb.njit(cache=True)
+def _share_at(x: float, grid: np.ndarray, best_share: np.ndarray) -> float:
+    """Equity share at x, linear between the neighbouring grid points."""
+    n = grid.shape[0]
+    if x >= grid[n - 1]:
+        return best_share[n - 1]
+    if x <= grid[0]:
+        return best_share[0]
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) >> 1
+        if grid[mid] <= x:
+            lo = mid
+        else:
+            hi = mid
+    wl = (x - grid[lo]) / (grid[lo + 1] - grid[lo])
+    return best_share[lo] + wl * (best_share[lo + 1] - best_share[lo])
+
+
+@nb.njit(cache=True)
+def exact_trade(x: float, alpha: float, equity_before: float, buy_cost: float, sell_cost: float) -> float:
+    """
+    Invested amount after trading costs when x is put into the portfolio and rebalanced to the
+    equity share alpha, starting from ``equity_before`` in equity (the savings account is free):
+    buying alpha X - E costs buy_cost per euro, selling E - alpha X costs sell_cost per euro.
+    """
+    if buy_cost == 0.0 and sell_cost == 0.0:
+        return x
+    x_buy = (x + buy_cost * equity_before) / (1.0 + buy_cost * alpha)
+    if alpha * x_buy >= equity_before:
+        return x_buy
+    return max((x - sell_cost * equity_before) / (1.0 - sell_cost * alpha), 0.0)
+
+
+@nb.njit(cache=True)
 def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, shares: np.ndarray, beta: float,
-            gamma: float, epsilon: float, h: np.ndarray, best_share: np.ndarray, reserve: float):
+            gamma: float, epsilon: float, h: np.ndarray, best_share: np.ndarray, reserve: float,
+            wealth: float = 0.0, buy_cost: float = 0.0, sell_cost: float = 0.0):
     """
     Optimal invested amount x and equity share for resources m > 0 at one market state.
 
@@ -306,6 +478,10 @@ def _decide(m: float, grid: np.ndarray, coef: np.ndarray, phi: np.ndarray, share
                 vmax, abest = v, shares[k]
         h[j] = vmax
         best_share[j] = abest
+    if buy_cost > 0.0 or sell_cost > 0.0:
+        x, z, _, _, _ = _optimal_with_costs(m, wealth, grid, h, _share_at(wealth, grid, best_share), buy_cost,
+                                            sell_cost, beta, gamma, epsilon, 0, 0)
+        return x, min(_share_at(z, grid, best_share), _max_share(z, reserve))
     x, _, l = _optimal_investment(m, grid, h, 0, beta, gamma, epsilon)
     if l + 1 < n_w and x > grid[l]:
         wl = (x - grid[l]) / (grid[l + 1] - grid[l])
@@ -323,7 +499,7 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
                   shares: np.ndarray, cashflows: np.ndarray, equity: np.ndarray, alive: np.ndarray, w0: float,
                   equity0: float, rf: float, equity_tax: float, savings_tax: float, beta: float, gamma: float,
                   epsilon: float, terminal_consume: bool, deflator: float, reserve: np.ndarray, state: np.ndarray,
-                  extra: np.ndarray):
+                  extra: np.ndarray, buy_cost: float, sell_cost: float):
     """
     Simulate the optimal policy on out-of-sample paths.
 
@@ -349,6 +525,7 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
     eq_before = np.full((n_t, n_paths), np.nan)
     sav_before = np.full((n_t, n_paths), np.nan)
     cap_tax = np.full((n_t, n_paths), np.nan)
+    trade_cost = np.full((n_t, n_paths), np.nan)
     d_max = coeffs.shape[1]
     for p in nb.prange(n_paths):
         eq_hold = min(max(equity0, 0.0), w0)
@@ -379,8 +556,11 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
             z = (np.log(state[p, t]) - means[t]) / stds[t] if stds[t] > 0.0 else 0.0
             for i in range(d_max):
                 phi[i] = z ** i if i <= degrees[t] else 0.0
-            x, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share, reserve[t])
-            cons[t, p] = m - x
+            x_cash, alpha = _decide(m, grid, coeffs[t], phi, shares, beta, gamma, epsilon, h, best_share,
+                                    reserve[t], w, buy_cost, sell_cost)
+            cons[t, p] = m - x_cash
+            x = exact_trade(x_cash, alpha, eq_hold, buy_cost, sell_cost)  # after the actual trading costs
+            trade_cost[t, p] = x_cash - x
             invested[t, p] = x
             share[t, p] = alpha
             r = equity[p, t + 1] / equity[p, t]
@@ -389,11 +569,11 @@ def forward_paths(grid: np.ndarray, coeffs: np.ndarray, means: np.ndarray, stds:
             # rf is after tax: pre-tax interest = after-tax interest / (1 - savings_tax)
             cap_tax[t, p] = deflator * (alpha * x * (r - 1.0) * equity_tax + (1.0 - alpha) * x * (rf - 1.0)
                                         * savings_tax / (1.0 - savings_tax))
-    return wealth, cons, share, invested, eq_before, sav_before, cap_tax
+    return wealth, cons, share, invested, eq_before, sav_before, cap_tax, trade_cost
 
 
 def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, state: float = 1.0,
-           extra_cashflow: float = 0.0) -> Dict[str, float]:
+           extra_cashflow: float = 0.0, equity_before: Optional[float] = None) -> Dict[str, float]:
     """
     Optimal decision of month t for a given wealth, from a saved policy (``policy_dict``).
 
@@ -412,6 +592,8 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, state: float = 
         S_t / S_0. Only matters for a regression degree > 0.
     extra_cashflow : float
         Path-dependent cashflow of the month in real euros (net fund-linked Rürup pension).
+    equity_before : float, optional
+        Current equity holding (real euros) for the exact trading costs; default: wealth * share.
 
     Returns
     -------
@@ -433,10 +615,15 @@ def decide(policy: Dict[str, np.ndarray], t: int, wealth: float, state: float = 
         z = (np.log(state) - float(policy["state_mean"][t])) / std if std > 0 else 0.0
         phi = np.array([z ** i if i <= int(policy["state_degree"][t]) else 0.0 for i in range(d_max)])
         grid = policy["wealth_grid"]
+        buy = float(policy["buy_cost"]) if "buy_cost" in policy else 0.0
+        sell = float(policy["sell_cost"]) if "sell_cost" in policy else 0.0
         x, alpha = _decide(m, grid, policy["coeffs"][t], phi, policy["equity_shares"], float(policy["beta"]),
                            float(policy["gamma"]), float(policy["epsilon"]), np.empty(grid.size),
-                           np.empty(grid.size), float(policy["reserve"][t]))
-        out.update(consumption=m - x, invested=x, equity_share=alpha)
+                           np.empty(grid.size), float(policy["reserve"][t]), wealth, buy, sell)
+        e_before = alpha * wealth if equity_before is None else equity_before
+        x_net = exact_trade(x, alpha, e_before, buy, sell)
+        out.update(consumption=m - x, invested=x_net, equity_share=alpha, trading_cost=x - x_net)
+    out.setdefault("trading_cost", 0.0)
     out["equity"] = out["equity_share"] * out["invested"]
     out["savings"] = out["invested"] - out["equity"]
     return out
@@ -479,6 +666,8 @@ class LSMCBellmanOptimizer:
         initial_equity: float = 0.0,
         inflation_rate: float = 0.0,
         reserve_months: float = 0.0,
+        buy_cost: float = 0.0,
+        sell_cost: float = 0.0,
         use_cache: bool = True,
         params_hash: str = "",
         cache_root: Optional[str] = None,
@@ -538,6 +727,10 @@ class LSMCBellmanOptimizer:
         reserve_months : float
             Emergency reserve: at least this many months of (real) fixed costs stay in the
             savings account (0: no reserve).
+        buy_cost, sell_cost : float
+            Proportional ETF trading costs (share of the traded amount); the savings account is
+            free. Backward induction: on the new money (keeps wealth the only state); forward
+            simulation: exact on the actual trades incl. rebalancing.
         use_cache : bool
             Cache the regression coefficients per month (ResultCache).
         params_hash : str
@@ -599,6 +792,10 @@ class LSMCBellmanOptimizer:
         costs = items.drop(columns=deducted).values / self.price_index[:, None]
         self.fixed_costs = -np.where(costs < 0.0, costs, 0.0).sum(axis=1)
         self.reserve_months = reserve_months
+        if not (0.0 <= buy_cost < 0.2 and 0.0 <= sell_cost < 0.2):
+            raise ValueError("buy_cost and sell_cost must be in [0, 20 %)")
+        self.buy_cost = float(buy_cost)
+        self.sell_cost = float(sell_cost)
         # reserve on the average fixed costs of the next 12 months (yearly insurances would
         # otherwise move money between savings account and equity every January)
         avg = np.array([self.fixed_costs[t:t + 12].mean() for t in range(self.n_months)])
@@ -633,6 +830,7 @@ class LSMCBellmanOptimizer:
         self.opt_ruerup_capital = pd.DataFrame()
         self.opt_ruerup_tax = pd.DataFrame()
         self.opt_shortfall = pd.DataFrame()
+        self.opt_trading_cost = pd.DataFrame()
         self.survival_paths = np.empty((0, 0))
         self.monthly_cashflows = pd.Series(self.cf, index=self.months)
 
@@ -764,10 +962,9 @@ class LSMCBellmanOptimizer:
             reg.fit_projection(proj.reshape(proj.shape[0], -1), sum_y.ravel(), sum_y2.ravel())
             self._store(t, reg)
 
-            cont = best_continuation(reg.q, proj, self.wealth_grid, self.equity_shares,
-                                     float(self.reserve[t]))  # best admissible equity share per (path, x)
-            v_next = bellman_values(self.wealth_grid, cont, self.cf[t] + extra[t], self.beta, self.gamma,
-                                    self.epsilon, self.shortfall_penalty)
+            cont, share = best_continuation(reg.q, proj, self.wealth_grid, self.equity_shares,
+                                            float(self.reserve[t]))  # best admissible equity share per (path, x)
+            v_next = self._bellman(cont, share, self.cf[t] + extra[t], reg.degree == 0)
 
             self.cache.store_date(self.months[t], {
                 "coeffs": reg.coeffs.reshape(reg.degree + 1, n_w, -1), "mean": reg.mean, "std": reg.std,
@@ -789,18 +986,46 @@ class LSMCBellmanOptimizer:
             data["value_in_sample"] = self.value_in_sample
             self.cache.store_date(self.months[0], data)
 
+    Y_NODES = 48  # support points of the per-path cashflow when the continuation is path-independent
+
+    def _bellman(self, cont: np.ndarray, share: np.ndarray, y: np.ndarray, same_continuation: bool) -> np.ndarray:
+        """
+        V_t per path. With a path-independent continuation (regression degree 0) V depends on the
+        path only through its cashflow y: it is computed once for identical cashflows, or on
+        ``Y_NODES`` quantiles of y and interpolated linearly in y (path-dependent Rürup pension).
+        """
+        def kernel(c: np.ndarray, a: np.ndarray, yy: np.ndarray) -> np.ndarray:
+            if self.buy_cost > 0.0 or self.sell_cost > 0.0:
+                return bellman_values_costs(self.wealth_grid, c, a, yy, self.beta, self.gamma, self.epsilon,
+                                            self.shortfall_penalty, self.buy_cost, self.sell_cost)
+            return bellman_values(self.wealth_grid, c, yy, self.beta, self.gamma, self.epsilon, self.shortfall_penalty)
+
+        if not same_continuation:
+            return kernel(cont, share, y)
+        y_min, y_max = float(y.min()), float(y.max())
+        if y_max - y_min <= 1e-9 * max(1.0, abs(y_max)):
+            row = kernel(cont[:1], share[:1], y[:1])
+            return np.repeat(row, y.size, axis=0)
+        nodes = np.unique(np.quantile(y, np.linspace(0.0, 1.0, self.Y_NODES)))
+        n = nodes.size
+        values = kernel(np.repeat(cont[:1], n, axis=0), np.repeat(share[:1], n, axis=0), nodes)
+        idx = np.clip(np.searchsorted(nodes, y) - 1, 0, n - 2)
+        w = ((y - nodes[idx]) / (nodes[idx + 1] - nodes[idx]))[:, None]
+        return values[idx] * (1.0 - w) + values[idx + 1] * w
+
     def roll_forward(self) -> None:
         """Forward simulation of the optimal policy on out-of-sample paths."""
         oos_seed = None if self.seed is None else self.seed + 1
         equity = self._equity_paths(self.n_sims_oos, oos_seed)
         ruerup = self._ruerup_simulation(equity)
         self.survival_paths = self.survival_process.simulate(n_sims=self.n_sims_oos, dates=self.months)
-        wealth, cons, share, invested, eq_before, sav_before, cap_tax = forward_paths(
+        wealth, cons, share, invested, eq_before, sav_before, cap_tax, trade_cost = forward_paths(
             self.wealth_grid, self.coeffs, self.state_mean, self.state_std, self.state_degree, self.equity_shares,
             self.cf, equity, self.survival_paths, self.initial_wealth, self.initial_equity, self.rf_nominal,
             self.equity_tax_rate, self.savings_tax_rate, self.beta, self.gamma, self.epsilon,
             not self.apply_terminal_penalty, 1.0 / self.inflation_factor, self.reserve, ruerup["state"],
-            ruerup["extra"])
+            ruerup["extra"], self.buy_cost, self.sell_cost)
+        self.opt_trading_cost = pd.DataFrame(trade_cost, index=self.months)
         dead = ~(self.survival_paths.T > 0)
         self.opt_extra_cashflow = pd.DataFrame(np.where(dead, np.nan, ruerup["extra"]), index=self.months)
         self.opt_ruerup_capital = pd.DataFrame(np.where(dead, np.nan, ruerup["capital"]), index=self.months)
@@ -903,6 +1128,7 @@ class LSMCBellmanOptimizer:
                 "prob_shortfall": float(shortfall.mean()),
                 "out_of_money_age_5pct": float(oom.loc[hit[0], "age"]) if len(hit) else float("nan"),
                 "unpaid_fixed_costs_mean": float(np.nansum(self.opt_shortfall.values[:-1], axis=0).mean()),
+                "trading_costs_mean": float(np.nansum(self.opt_trading_cost.values, axis=0).mean()),
                 "life_expectancy": float(self.age_grid[0] + self.survival_paths.sum(axis=1).mean() / 12.0),
                 "regression_r2_median": float(np.nanmedian(list(self.r_squared.values()))),
                 "from_cache": self.from_cache,
@@ -944,11 +1170,13 @@ class LSMCBellmanOptimizer:
             "epsilon": np.float64(self.epsilon), "terminal_consume": np.bool_(not self.apply_terminal_penalty),
             "price_index": self.price_index, "reserve": self.reserve,
             "ruerup_index": np.int64(self.ruerup_index), "has_ruerup": np.bool_(bool(self.ruerup_plans)),
+            "buy_cost": np.float64(self.buy_cost), "sell_cost": np.float64(self.sell_cost),
         }
 
-    def decide(self, t: int, wealth: float, state: float = 1.0, extra_cashflow: float = 0.0) -> Dict[str, float]:
+    def decide(self, t: int, wealth: float, state: float = 1.0, extra_cashflow: float = 0.0,
+               equity_before: Optional[float] = None) -> Dict[str, float]:
         """Optimal decision of month t for a given wealth (see module function ``decide``)."""
-        return decide(self.policy_dict(), t, wealth, state, extra_cashflow)
+        return decide(self.policy_dict(), t, wealth, state, extra_cashflow, equity_before)
 
     def cashflow_items(self) -> pd.DataFrame:
         """

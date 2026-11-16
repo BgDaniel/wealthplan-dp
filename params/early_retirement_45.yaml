@@ -120,6 +120,13 @@ inflation:
   tax_brackets_indexed: true       # tariff brackets, allowances, Basisvorsorge room grow with inflation
 
 # ----------------------------
+# ETF trading costs (share of the traded amount; the savings account is free)
+# ----------------------------
+trading:
+  buy_cost: 0.002     # 0.2 % per purchase (order fee / spread / Ausgabeaufschlag) - adjust to your broker
+  sell_cost: 0.003    # 0.3 % per sale
+
+# ----------------------------
 # Emergency reserve
 # ----------------------------
 reserve:

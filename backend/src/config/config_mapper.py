@@ -169,6 +169,8 @@ class ConfigMapper:
             KEY_EQUITY_TAX_RATE: tax.equity_tax_rate,
             KEY_INFLATION_RATE: inflation.rate,
             KEY_RESERVE_MONTHS: reserve_months,
+            "buy_cost": float((data.get("trading") or {}).get("buy_cost", 0.0)),
+            "sell_cost": float((data.get("trading") or {}).get("sell_cost", 0.0)),
         }
 
         # ----------------------

@@ -150,6 +150,17 @@ euros of the chosen month.
 life expectancy at 40 and 65 of the Destatis period life table 2021/23 – or `custom` (b, c).
 `age_shift` (years) moves the hazard: −3 ≈ cohort adjustment of the period table.
 
+## ETF trading costs (YAML section `trading`)
+
+`buy_cost` / `sell_cost`: proportional costs per euro bought / sold in the ETF (order fee, spread,
+Ausgabeaufschlag); the savings account is free. To keep wealth the only state, the backward
+induction charges them on the **new money** (saving buys the equity part at the target share,
+a withdrawal sells it) – this creates a "do not trade" zone where consuming exactly the net
+cashflow is optimal. The forward simulation and the Steering page charge the **exact** costs of
+the actual trades incl. rebalancing from the current holdings. Costs 0 reproduce the model
+without costs exactly. (Exact costs in the optimisation would need the equity holding as a
+second state.)
+
 ## Emergency reserve (YAML section `reserve`)
 
 With `enabled`, at least `months_of_fixed_costs` × the average monthly fixed costs of the
