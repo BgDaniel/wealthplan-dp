@@ -186,7 +186,7 @@ stochastic:
 # ----------------------------
 technical:
   w_max: 3000000.0         # upper end of the wealth grid (linear extrapolation beyond)
-  n_wealth: 200            # wealth grid points, denser at low wealth
+  n_wealth: 400            # wealth grid points, denser at low wealth
   n_equity_shares: 11      # equity share grid 0 %, 10 %, ..., max_equity_share
   max_equity_share: 1.0
   regression_degree: 0     # LSMC degree in the log of the state (Rürup capital / pension); > 0 makes the equity share noisy, see README
