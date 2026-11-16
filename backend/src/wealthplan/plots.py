@@ -249,17 +249,6 @@ def equity_policy(opt, t) -> Figure:
     return fig
 
 
-def survival(opt, t) -> Figure:
-    fig, ax = plt.subplots(figsize=(11, 4.0))
-    ax.plot(opt.age_grid, 100.0 * opt.survival_probabilities, color=PURPLE, label="model")
-    ax.plot(opt.age_grid, 100.0 * opt.survival_paths.mean(axis=0), color=t["muted"], lw=1.0, ls=":",
-            label="simulated")
-    ax.set(title="Probability to be alive", xlabel="Age", ylabel="%")
-    ax.set_ylim(0, 102)
-    ax.legend(loc="lower left")
-    return fig
-
-
 def regression(opt, t) -> Figure:
     months = [m for m in opt.months if m in opt.r_squared]
     ages = [opt.age_grid[i] for i, m in enumerate(opt.months) if m in opt.r_squared]
@@ -274,25 +263,29 @@ def regression(opt, t) -> Figure:
     return fig
 
 
-def depletion(opt, t) -> Figure:
-    """Probability (among the living) of low wealth and of unpaid fixed costs."""
+def survival_risk(opt, t) -> Figure:
+    """
+    Probability to be alive (model) together with the depletion risk among the paths alive:
+    low wealth, fixed costs not payable this month, out of money at least once.
+    """
     from wealthplan.analysis import depletion_risk
 
     risk = depletion_risk(opt)
     ok = risk["alive_paths"].values >= 20
-    fig, ax = plt.subplots(figsize=(11, 4.4))
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    ax.plot(opt.age_grid, 100.0 * opt.survival_probabilities, color=PURPLE, label="alive (Destatis life table)")
     ax.plot(risk["age"][ok], 100.0 * risk["low_wealth"][ok], color=BLUE,
-            label="wealth below 6 months of fixed costs")
-    ax.plot(risk["age"][ok], 100.0 * risk["shortfall"][ok], color=PURPLE, ls="--",
-            label="fixed costs cannot be paid (this month)")
+            label="of the living: wealth below 6 months of fixed costs")
+    ax.plot(risk["age"][ok], 100.0 * risk["shortfall"][ok], color=BLUE, ls="--",
+            label="of the living: fixed costs cannot be paid (this month)")
     ax.plot(risk["age"][ok], 100.0 * risk["shortfall_ever"][ok], color=OUT_OF_MONEY, ls=":", lw=1.8,
-            label="⚠ out of money at least once so far")
-    ax.set(title="Depletion risk (share of the paths alive at that age)", xlabel="Age", ylabel="%")
-    ax.set_ylim(bottom=0)
-    ax.text(0.99, 0.5, "the plan consumes the remaining\nwealth towards its end date", transform=ax.transAxes,
-            ha="right", va="center", color=t["muted"], fontsize=9)
+            label="of the living: ⚠ out of money at least once so far")
+    ax.set(title="Survival and depletion risk", xlabel="Age", ylabel="%")
+    ax.set_ylim(0, 102)
+    ax.text(0.99, 0.86, "low wealth near the end: the plan consumes\nthe remaining wealth towards its end date",
+            transform=ax.transAxes, ha="right", va="center", color=t["muted"], fontsize=9)
     _retirement(ax, opt, t)
-    ax.legend(loc="upper left")
+    ax.legend(loc="lower left", fontsize=9)
     return fig
 
 
@@ -371,11 +364,10 @@ FIGURES: Dict[str, Tuple[str, Callable]] = {
     "05_flows": ("Monthly investment", flows),
     "06_saving": ("Saving / withdrawal", investment),
     "07_equity_policy": ("Equity policy", equity_policy),
-    "08_survival": ("Survival", survival),
+    "08_survival_risk": ("Survival & depletion risk", survival_risk),
     "09_regression": ("Regression R²", regression),
-    "10_depletion": ("Depletion risk", depletion),
-    "11_taxes": ("Taxes", taxes),
-    "12_ruerup": ("Rürup contract", ruerup),
+    "10_taxes": ("Taxes", taxes),
+    "11_ruerup": ("Rürup contract", ruerup),
 }
 
 

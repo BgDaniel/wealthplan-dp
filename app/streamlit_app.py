@@ -65,11 +65,10 @@ FIGURE_TITLES = {
     "05_flows": "Monthly investment",
     "06_saving": "Saving / withdrawal",
     "07_equity_policy": "Equity policy",
-    "08_survival": "Survival",
+    "08_survival_risk": "Survival & depletion risk",
     "09_regression": "Regression R²",
-    "10_depletion": "Depletion risk",
-    "11_taxes": "Taxes",
-    "12_ruerup": "Rürup contract",
+    "10_taxes": "Taxes",
+    "11_ruerup": "Rürup contract",
 }
 
 FIGURE_HELP = {
@@ -88,18 +87,17 @@ FIGURE_HELP = {
                  "withdrawal from the holdings.",
     "07_equity_policy": "Optimal equity share as a function of age and invested wealth (median Rürup state). "
                         "Dashed: median invested wealth of the simulation.",
-    "08_survival": "Probability to be alive at each age (Gompertz fit of the Destatis life table; simulated "
-                   "share dotted).",
+    "08_survival_risk": "Purple: probability to be alive at each age (Gompertz fit of the Destatis life table). "
+                        "Among the paths alive: share with wealth below 6 months of fixed costs (blue), share "
+                        "where the fixed costs cannot be paid this month (blue dashed) and share that has been out "
+                        "of money at least once (red dotted). Low wealth rises towards the plan end because the plan "
+                        "consumes the rest. In the other figures the ages are shaded red once ≥ 5 %, darker once "
+                        "≥ 25 % and darkest once ≥ 50 % of the paths have been out of money.",
     "09_regression": "Quality of the LSMC regression of the continuation value on the regression state "
                      "(Rürup capital / pension); median R² over the wealth grid per month.",
-    "10_depletion": "Among the paths alive: share with wealth below 6 months of fixed costs, share where the "
-                    "fixed costs cannot be paid this month, and share that has been out of money at least once "
-                    "(red dotted). Low wealth rises towards the plan end because the plan consumes the rest. In all "
-                    "figures the ages are shaded red once ≥ 5 %, darker once ≥ 25 % and darkest once ≥ 50 % of "
-                    "the paths have been out of money.",
-    "11_taxes": "Taxes per year: capital gains tax on interest and ETF returns (median and 25–75 %), income tax "
+    "10_taxes": "Taxes per year: capital gains tax on interest and ETF returns (median and 25–75 %), income tax "
                 "on pensions (incl. the Rürup part), Rürup tax refund as negative tax.",
-    "12_ruerup": "Rürup contract capital on the simulated ETF paths until the pension start (median and bands) "
+    "11_ruerup": "Rürup contract capital on the simulated ETF paths until the pension start (median and bands) "
                  "and the resulting net Rürup pension.",
 }
 

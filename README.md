@@ -24,8 +24,8 @@ poetry run streamlit run app/streamlit_app.py
   time. Runs compute in background processes (`results/_jobs/`), at most *n* in parallel;
   the table shows progress, remaining time and key figures.
 * **Result**: key figures, figures (wealth, consumption, equity share, equity vs. savings
-  holdings, monthly buy/sell per asset, saving/withdrawal, equity policy map, survival,
-  regression R², depletion risk, taxes per year, Rürup contract),
+  holdings, monthly buy/sell per asset, saving/withdrawal, equity policy map,
+  survival & depletion risk, regression R², taxes per year, Rürup contract),
   runtimes, downloads.
 * **Compare**: median curves, key figures and differing parameters of up to four runs.
 * **Configurations**: the YAML files in `params/` as forms (add, copy, edit, delete), incl.
