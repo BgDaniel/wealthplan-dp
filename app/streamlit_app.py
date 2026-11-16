@@ -638,6 +638,19 @@ def steering_page() -> None:
         st.caption(f"Changes compared with {months[ref]:%B %Y} (current month), same holdings.")
     with st.expander("What do these numbers mean?", expanded=False):
         st.markdown(STEERING_HELP)
+    # year view as in the consumption figure: bonus and yearly insurances spread over the year
+    year_idx = [i for i, mo in enumerate(months) if mo.year == month.year]
+    if len(year_idx) >= 2:
+        all_quant = pd.read_csv(run_dir / "quantiles.csv", index_col=0)
+        prices = np.asarray(policy["price_index"])[year_idx] if "price_index" in policy else np.ones(len(year_idx))
+        net_year = float(all_items.iloc[year_idx].sum(axis=1).mean())
+        cons_year = float(np.nanmean(all_quant["consumption_p50"].values[year_idx] * prices))
+        st.markdown(
+            f'<div class="facts">Monthly average of {month.year} (bonus spread over the year, as in the '
+            f'consumption figure; median path): net cashflow <b>{_eur(net_year)}</b> · consumption '
+            f'<b>{_eur(cons_year)}</b> · saving <b>{_eur(net_year - cons_year)}</b> per month. Single months '
+            f'without the bonus can show a withdrawal, the bonus month a large purchase.</div>',
+            unsafe_allow_html=True)
     if price > 1.0005:
         start_year = months[0].year
         st.markdown(f'<div class="facts">In purchasing power of {start_year} (÷ price index <b>{price:.2f}</b>): '
