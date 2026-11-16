@@ -124,8 +124,8 @@ CSS = """
   .kpi .label {color: #9aa3c7; font-size: 0.8rem;}
   .kpi .value {color: #e7e9f5; font-size: 1.75rem; font-weight: 600; line-height: 1.3;}
   .kpi .delta {font-size: 0.85rem; color: #9aa3c7;}
-  .kpi .delta.good {color: #5fc79a;}
-  .kpi .delta.bad {color: #e66767;}
+  .kpi .delta.good {color: #39ff88; text-shadow: 0 0 8px rgba(57, 255, 136, 0.55); font-weight: 600;}
+  .kpi .delta.bad {color: #ff3d5a; text-shadow: 0 0 8px rgba(255, 61, 90, 0.55); font-weight: 600;}
   .ci {color: #8f86c9; font-size: 0.62em; font-weight: 400; white-space: nowrap; margin-left: 0.35em;}
   .detail .ci, .facts .ci {font-size: 0.92em;}
 </style>
@@ -490,21 +490,21 @@ def _band(quant: pd.Series, name: str, scale: float, show: bool, shift: float = 
 
 
 def _ci(band: Band, signed: bool = False, percent: bool = False) -> str:
-    """Small bracketed range behind a value, e.g. ``(3,410 – 4,480 €)``."""
+    """Small bracketed range behind a value, e.g. ``(3,410 to 4,480 €)``."""
     if band is None:
         return ""
     if percent:
-        text = f"{100 * band[0]:.0f} – {100 * band[1]:.0f} %"
+        text = f"{100 * band[0]:.0f} to {100 * band[1]:.0f} %"
     elif signed:  # trades: sell (negative) / buy (positive)
         lo, hi = band
         if hi <= 0.5:
-            text = f"sell {-hi:,.0f} – {-lo:,.0f} €"
+            text = f"sell {-hi:,.0f} to {-lo:,.0f} €"  # sell amounts: × (−1), bounds swapped
         elif lo >= -0.5:
-            text = f"buy {lo:,.0f} – {hi:,.0f} €"
+            text = f"buy {lo:,.0f} to {hi:,.0f} €"
         else:
-            text = f"sell {-lo:,.0f} … buy {hi:,.0f} €"
+            text = f"sell {-lo:,.0f} to buy {hi:,.0f} €"
     else:
-        text = f"{band[0]:,.0f} – {band[1]:,.0f} €"
+        text = f"{band[0]:,.0f} to {band[1]:,.0f} €"
     return f'<span class="ci" title="90 % range of the simulated paths (5th–95th percentile)">({text})</span>'
 
 
